@@ -404,6 +404,23 @@ sudo -u postgres psql -d fence_demo -c "\dt shop.*"
 
 ## 6. 运行①：离线模式（不需要数据库）
 
+> **先厘清一件最容易混淆的事：schemafence 有两种运行方式，它们是独立的，不是"先决条件"关系。**
+
+| | 离线模式（第 6 节） | live 模式（第 7 节） |
+|---|---|---|
+| 命令 | `python3 demo.py` | `python3 demo.py --db postgresql://...` |
+| 数据来源 | 一份 DDL 文本文件 `examples/sample_schema.sql` | 真实数据库的 `pg_catalog` + `pg_stats` |
+| 需要装 Python 包吗 | **不需要**（零依赖，只用标准库） | 需要 `pip install -r requirements.txt`（只有 psycopg 驱动） |
+| 需要数据库在跑吗 | **不需要** | **需要**（PG16 已就绪） |
+| 典型输出 | `16 finding(s): 5 high / 9 medium / 2 low` | `tables read from the catalogue : 7` |
+| 可以跳过吗 | 不建议（它是"克隆下来 5 分钟能跑"的证明） | 可跳过，但第 7 节的价值在于用**真实统计信息**复核同一批检查 |
+
+**记住三句话**：
+
+1. **只有 live 模式才需要 `pip install`**。离线模式一个包都不装。
+2. **`pip install` 不是 live 模式的全部前提**——还必须有一个**正在运行的 PG**（第 5 节装好的那个），两者缺一不可。
+3. **装不上 psycopg 也不影响离线模式**，两者互不依赖。
+
 ### 6.1 跑起来 `[VM]`
 
 ```bash
@@ -504,6 +521,10 @@ reason : multiple statements in one call are not allowed
 
 前面都是对着一份 DDL 文本做静态分析。现在要连上真正跑起来的 PG，从系统目录里读**真实结构、真实行数估算、真实的 NULL 比例**。
 
+> **这一节是可选的进阶步骤**，跟第 6 节的离线模式互不依赖。这里才需要 `pip install`（只装 psycopg 驱动），而离线模式始终不需要。本节跑不通也不影响第 6 节的结论。
+>
+> **本节的前提条件**（两个都要满足）：① 第 5 节已完成、PG 正在运行；② `pg_hba.conf` 的 host 行是 `scram-sha-256` 而不是 `ident` —— 否则会报 `password authentication failed`，见 5.3 与 11.5。
+
 ### 7.1 建一个隔离的 Python 环境 `[VM]`
 
 ```bash
@@ -518,7 +539,17 @@ source .venv/bin/activate
 (.venv) [gavin@schemafence-pg schemafence]$
 ```
 
-> **为什么必须用 venv**：Oracle Linux 10（和所有 RHEL 9+）不允许直接往系统 Python 装包，会报 `error: externally-managed-environment`。venv 相当于给这个项目单独一个抽屉，装什么都不影响系统。
+> **为什么用 venv（而不是像以前那样直接 `pip install`）**：Oracle Linux 10（以及所有 RHEL 9+ / Ubuntu 23.04+）遵循 **PEP 668**，系统 Python 目录里有一个 `/usr/lib/python3.x/EXTERNALLY-MANAGED` 标记文件，pip 看到它就拒绝安装——你会看到 `error: externally-managed-environment`。**这不是权限问题，`sudo pip install` 一样会被拦**。原因是系统自己的工具（如 dnf 的 Python 插件）依赖这些 PyPI 包，pip 直接覆盖会在几个月后把系统的包管理器弄坏。
+>
+> **venv 不是唯一出路，但它是本手册推荐的那条**——不需要 root、不污染系统、跟别人复现你的环境时结果一致。三种做法对比：
+>
+> | 方案 | 命令 | 特点 |
+> |---|---|---|
+> | **venv（本手册）** | `python3 -m venv .venv && source .venv/bin/activate` | 不需要 root；每个项目一个独立抽屉；换机器/换云主机都一样 |
+> | 系统级 RPM 包 | `sudo dnf install python3-psycopg3` | 装到系统 Python 里、由 dnf 管理（最"正统"）。但 OL10 上这个包在 **EPEL** 里，得先 `sudo dnf install oracle-epel-release-el10`，且版本比 PyPI 旧 |
+> | 强行覆盖系统 Python | `sudo pip install --break-system-packages -r requirements.txt` | 也就是"root 想装就装"的老办法，加了 `--break-system-packages` 才能绕过 PEP 668。**容器里随便用，正经机器上不推荐**（可能和 RPM 包冲突） |
+>
+> 一句话：venv 多打两个单词，换来的是"不会在几周后把 dnf 弄坏"。
 
 ### 7.2 装 live 模式唯一需要的依赖 `[VM]`
 
