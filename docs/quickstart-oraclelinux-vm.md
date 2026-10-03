@@ -856,6 +856,9 @@ journalctl -u postgresql -n 50 --no-pager
 | `could not create lock file ... Permission denied` | 数据目录属主不对 | `sudo chown -R postgres:postgres /var/lib/pgsql/data` |
 | `could not load library ... vector.so: Permission denied` | **SELinux 拦了源码编译的插件** | `sudo restorecon -Rv /usr/lib64/pgsql /usr/share/pgsql && sudo systemctl restart postgresql` |
 | `make: pg_config: 没有那个文件或目录`（编译 pgvector 时） | OL10 的 `postgresql-devel` **不带** `pg_config` | `sudo dnf -y install postgresql-server-devel`，然后重跑 `bash scripts/setup_pg.sh` |
+| `错误：无法打开当前目录：传输端点尚未连接`（dnf 安装时） | 当前目录在一个**失效的挂载点**上（如 VMware 共享文件夹） | `cd /tmp` 换到本地目录再执行；通用经验：报"打不开当前目录"先换目录 |
+| `[warn] could not locate pg_hba.conf` | 数据目录是 700，普通用户无法测试文件存在性（脚本 ≥ 此版本的 `sudo test` 写法已修复） | 忽略 warn 也可手工核对：`sudo grep -E "^host.*ident" /var/lib/pgsql/data/pg_hba.conf` |
+| `psql: 权限不够`（读 sample_schema.sql 时） | postgres 用户进不了你的家目录（脚本 ≥ 此版本已改为 stdin 重定向，不会再出现） | 临时绕过：`sudo -u postgres psql -q -d fence_demo < ~/schemafence/examples/sample_schema.sql` |
 | `port 5432 already in use` | 有别的实例在跑 | `sudo ss -lntp \| grep 5432` 找出进程 |
 
 ### 11.4 pgvector 装不上 / `pgvector = NOT INSTALLED`

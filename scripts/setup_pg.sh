@@ -195,7 +195,10 @@ echo "    cluster is up"
 # how live mode (--db postgresql://...) connects. Debian already ships scram.
 step "configuring password authentication"
 HBA_FILE="$($PSQL psql -tAc 'SHOW hba_file' 2>/dev/null | tr -d '[:space:]')"
-if [ -n "${HBA_FILE}" ] && [ -f "${HBA_FILE}" ]; then
+# The data directory is mode 700 (postgres-only): a plain `[ -f ]` as the
+# invoking user cannot traverse it and would wrongly report "not found".
+# Run the test under $PKG (sudo/root), which can always reach it.
+if [ -n "${HBA_FILE}" ] && $PKG test -f "${HBA_FILE}"; then
   echo "    pg_hba.conf : ${HBA_FILE}"
   if grep -qE '^[[:space:]]*host[[:space:]]+.*[[:space:]]ident[[:space:]]*$' "${HBA_FILE}"; then
     $PKG cp "${HBA_FILE}" "${HBA_FILE}.bak.$(date +%Y%m%d%H%M%S)"
@@ -231,7 +234,10 @@ else
 fi
 
 step "loading the demo schema"
-$PSQL psql -q -d "${DB_NAME}" -f "${REPO_ROOT}/examples/sample_schema.sql" \
+# Feed the SQL via stdin, not `-f`: the postgres user cannot read files under
+# the invoking user's home (e.g. /home/<user> is not world-traversable), while
+# the stdin redirect is performed by the invoking user itself.
+$PSQL psql -q -d "${DB_NAME}" < "${REPO_ROOT}/examples/sample_schema.sql" \
   || die "loading examples/sample_schema.sql failed"
 
 step "collecting statistics (pg_stats is what the NULL-fraction check reads)"
