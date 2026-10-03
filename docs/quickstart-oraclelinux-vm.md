@@ -306,7 +306,7 @@ bash scripts/setup_pg.sh
 |---|---|---|---|
 | 1 | 判断包管理器 | `command -v dnf` | 选对安装方式 |
 | 2 | 装 PG | `dnf -y install postgresql-server postgresql-contrib` | Oracle Linux 10 装的是 **PostgreSQL 16**（AppStream 自带） |
-| 3 | 装 pgvector | 自动装编译工具（`gcc make git postgresql-devel`）→ `git clone v0.8.7` → `make install` → `restorecon` | ⚠️ **默认源码编译最新版 0.8.7**。Oracle Linux AppStream 自带的发行版包只有 0.6.x，默认不用；想省事用旧版就 `PGVECTOR_FROM_DIST=1 bash scripts/setup_pg.sh` |
+| 3 | 装 pgvector | 自动装编译工具（`gcc make git postgresql-server-devel`）→ `git clone v0.8.7` → `make install` → `restorecon` | ⚠️ **默认源码编译最新版 0.8.7**。注意：OL10 的 `postgresql-devel` 不带 `pg_config`，必须用 `postgresql-server-devel`（脚本已处理）。发行版包只有 0.6.x，默认不用；想省事用旧版就 `PGVECTOR_FROM_DIST=1 bash scripts/setup_pg.sh` |
 | 4 | **初始化数据目录** | `postgresql-setup --initdb` | ⚠️ **RHEL 系独有**。Debian 系是装包时自动初始化的，RHEL 系必须显式执行，否则服务起不来 |
 | 5 | 启动服务 | `systemctl enable --now postgresql` | ⚠️ **RHEL 系服务名是 `postgresql`**（不是 Ubuntu 的 `postgresql@16-main`）；debian 系还要 `pg_ctlcluster` |
 | 6 | **修认证方式** | 把 `pg_hba.conf` 里的 `ident` 改成 `scram-sha-256` | ⚠️ **RHEL 系独有且关键**，详见下一节 |
@@ -855,6 +855,7 @@ journalctl -u postgresql -n 50 --no-pager
 | `directory "/var/lib/pgsql/data" is missing or empty` | **忘了 initdb**（Oracle Linux 上最常见） | `cd /tmp && sudo postgresql-setup --initdb --unit postgresql` |
 | `could not create lock file ... Permission denied` | 数据目录属主不对 | `sudo chown -R postgres:postgres /var/lib/pgsql/data` |
 | `could not load library ... vector.so: Permission denied` | **SELinux 拦了源码编译的插件** | `sudo restorecon -Rv /usr/lib64/pgsql /usr/share/pgsql && sudo systemctl restart postgresql` |
+| `make: pg_config: 没有那个文件或目录`（编译 pgvector 时） | OL10 的 `postgresql-devel` **不带** `pg_config` | `sudo dnf -y install postgresql-server-devel`，然后重跑 `bash scripts/setup_pg.sh` |
 | `port 5432 already in use` | 有别的实例在跑 | `sudo ss -lntp \| grep 5432` 找出进程 |
 
 ### 11.4 pgvector 装不上 / `pgvector = NOT INSTALLED`
@@ -888,7 +889,8 @@ sudo -u postgres psql -d fence_demo -c "CREATE EXTENSION IF NOT EXISTS vector;"
 **A-2　源码编译**（脚本的默认路径，手工版）：
 
 ```bash
-sudo dnf -y install gcc make git postgresql-devel
+sudo dnf -y install gcc make git postgresql-server-devel
+pg_config --version   # 能输出 PostgreSQL 16.x 再继续
 rm -rf /tmp/pgvector
 git clone --branch v0.8.7 --depth 1 https://github.com/pgvector/pgvector.git /tmp/pgvector
 make -C /tmp/pgvector && sudo make -C /tmp/pgvector install

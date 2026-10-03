@@ -122,9 +122,18 @@ if [ "$PGVECTOR_INSTALLED" -eq 0 ]; then
     PG_SHAREDIR="/usr/share/postgresql/${PG_VER}"
     PG_LIBDIR="/usr/lib/postgresql/${PG_VER}/lib"
   else
-    $PKG dnf -y -q install gcc make git postgresql-devel 2>/dev/null \
-      || $PKG dnf -y -q install gcc make git postgresql-server-devel 2>/dev/null \
-      || die "could not install the build toolchain"
+    # OL10/RHEL10: `postgresql-devel` installs but does NOT ship pg_config;
+    # `postgresql-server-devel` is what extension builds actually need.
+    $PKG dnf -y -q install gcc make git 2>/dev/null \
+      || die "could not install gcc/make/git"
+    if ! command -v pg_config >/dev/null 2>&1; then
+      $PKG dnf -y -q install postgresql-server-devel 2>/dev/null \
+        || $PKG dnf -y -q install libpq-devel 2>/dev/null \
+        || die "could not install the PostgreSQL development headers"
+    fi
+    if ! command -v pg_config >/dev/null 2>&1; then
+      die "pg_config is still missing — run: sudo dnf install postgresql-server-devel, then rerun this script"
+    fi
     PG_SHAREDIR="$(pg_config --sharedir 2>/dev/null)"
     PG_LIBDIR="$(pg_config --pkglibdir 2>/dev/null)"
   fi
