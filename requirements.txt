@@ -1,0 +1,11 @@
+# Offline demo (python demo.py) needs nothing but Python 3.10+.
+# The single dependency below is for live mode (--db).
+
+psycopg[binary]>=3.1
+python-dotenv>=1.0
+
+# Day 4-5, uncomment when you add embeddings and a real model.
+# Any OpenAI-compatible endpoint works: DeepSeek, Qwen, GLM, OpenAI.
+#
+# openai>=1.40
+# tiktoken>=0.7
