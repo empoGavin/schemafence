@@ -164,7 +164,10 @@ if [ "$FAMILY" = debian ]; then
   $PKG systemctl enable --now postgresql >/dev/null 2>&1 || true
 else
   # RHEL family: the cluster is NOT initialised by the package.
-  if [ ! -f /var/lib/pgsql/data/PG_VERSION ]; then
+  # Note: /var/lib/pgsql/data is mode 700 (postgres-only), so the existence
+  # test must run under $PKG — a plain `[ -f ]` cannot traverse the directory
+  # as an unprivileged user and would report "not initialised" every time.
+  if ! $PKG test -f /var/lib/pgsql/data/PG_VERSION; then
     echo "    initialising /var/lib/pgsql/data (RHEL family requires this)"
     $PKG postgresql-setup --initdb --unit postgresql >/dev/null 2>&1 \
       || $PKG postgresql-setup --initdb >/dev/null 2>&1 \
@@ -200,7 +203,10 @@ HBA_FILE="$($PSQL psql -tAc 'SHOW hba_file' 2>/dev/null | tr -d '[:space:]')"
 # Run the test under $PKG (sudo/root), which can always reach it.
 if [ -n "${HBA_FILE}" ] && $PKG test -f "${HBA_FILE}"; then
   echo "    pg_hba.conf : ${HBA_FILE}"
-  if grep -qE '^[[:space:]]*host[[:space:]]+.*[[:space:]]ident[[:space:]]*$' "${HBA_FILE}"; then
+  # grep must also run under $PKG: an unprivileged read of the 700-permission
+  # data directory silently yields nothing, which would look like "no ident
+  # lines" and skip the rewrite without a word.
+  if $PKG grep -qE '^[[:space:]]*host[[:space:]]+.*[[:space:]]ident[[:space:]]*$' "${HBA_FILE}"; then
     $PKG cp "${HBA_FILE}" "${HBA_FILE}.bak.$(date +%Y%m%d%H%M%S)"
     $PKG sed -i -E \
       's/^([[:space:]]*host[[:space:]]+.*[[:space:]])ident([[:space:]]*)$/\1scram-sha-256\2/' \
