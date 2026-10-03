@@ -82,13 +82,21 @@ python demo.py --ask "哪个表存了退款信息？"
 #   #1  shop.refunds               score 12      ← no ambiguity, nothing to catch
 ```
 
-With a live database (optional — see [`docs/quickstart-cloudstudio.md`](docs/quickstart-cloudstudio.md)):
+With a live database (optional — pick your platform):
 
 ```bash
 bash scripts/setup_pg.sh
 pip install -r requirements.txt
 python demo.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo
 ```
+
+`setup_pg.sh` handles both package families: `apt` (Debian/Ubuntu) and `dnf`
+(RHEL, Oracle Linux, Rocky, AlmaLinux). Step-by-step guides:
+
+| Platform | Guide |
+| -------- | ----- |
+| Local **Oracle Linux 10** VM on VMware | [`docs/quickstart-oraclelinux-vm.md`](docs/quickstart-oraclelinux-vm.md) |
+| **Cloud Studio** free tier (Ubuntu container) | [`docs/quickstart-cloudstudio.md`](docs/quickstart-cloudstudio.md) |
 
 Using it as a library:
 
@@ -126,7 +134,7 @@ print(verdict.ok, verdict.layer, verdict.reason)
 - [x] Offline audit: checks 1–4 plus hygiene, straight from a DDL file
 - [x] Seven-layer guardrail with a 13-case selftest
 - [x] Live mode: reads the catalogue and `pg_stats` (measured NULL fractions)
-- [x] Cloud Studio setup script and [quickstart](docs/quickstart-cloudstudio.md)
+- [x] Setup script for both `apt` and `dnf` families, plus two quickstarts ([Oracle Linux VM](docs/quickstart-oraclelinux-vm.md) · [Cloud Studio](docs/quickstart-cloudstudio.md))
 - [ ] Schema snapshot in pgvector, real embeddings — *day 4*
 - [ ] Tool-calling agent over a real model — *day 5*
 - [ ] Guardrails wired into the execution path — *day 6*
