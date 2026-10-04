@@ -683,17 +683,19 @@ GitHub → Settings → 最下方 Danger Zone → **Change visibility → Public
 
 **没有 key 也能完成 Day 4–5 的全部内容**（离线模式）。有 key 之后再加两个能力。
 
-### A.1 申请（二选一）
+### A.1 申请（三选一）
 
 | 供应商 | 用途 | 地址 |
 |---|---|---|
 | 阿里云百炼 | embedding（`text-embedding-v3`，1024 维）+ qwen-plus | dashscope.console.aliyun.com |
+| 硅基流动 SiliconFlow | embedding（`BAAI/bge-m3`，1024 维） | cloud.siliconflow.cn |
 | DeepSeek | chat（`deepseek-chat`），embedding 需另配 | platform.deepseek.com |
 
 ### A.2 环境变量（不用装 dotenv，代码直接读环境变量）
 
 ```bash
 # 写进 ~/.schemafence.env（别提交进仓库）
+# —— 百炼方案 ——
 cat > ~/.schemafence.env <<'EOF'
 export SF_EMBED_API_KEY=sk-xxxx
 export SF_EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -704,9 +706,31 @@ export SF_LLM_MODEL=deepseek-chat
 EOF
 chmod 600 ~/.schemafence.env
 
-# 每次开 shell 时加载
-set -a; source ~/.schemafence.env; set +a
+# —— 硅基流动方案（注意 model 必须换，text-embedding-v3 是百炼专属）——
+export SF_EMBED_API_KEY=sk-硅基流动的key
+export SF_EMBED_BASE_URL=https://api.siliconflow.cn/v1
+export SF_EMBED_MODEL=BAAI/bge-m3          # 1024 维，与默认表结构对齐
+
+# LLM 也用硅基流动时（key 可复用同一个；模型必须支持 function calling）
+export SF_LLM_API_KEY=sk-硅基流动的key
+export SF_LLM_BASE_URL=https://api.siliconflow.cn/v1
+export SF_LLM_MODEL=Qwen/Qwen3-8B          # 免费档，官方标注支持工具调用
+# 备选：deepseek-ai/DeepSeek-V3.2（付费但极便宜，function calling 成熟）
 ```
+
+> **agent_cli 会自动读取 `~/.schemafence.env`**（启动时 header 有一行 `env file : ...`
+> 告诉你生效了哪些变量）。规则：只认 `SF_` 开头的键；**环境里已有的变量优先**于文件
+> （临时覆盖用 `SF_EMBED_MODEL=x python agent_cli.py ...` 仍然有效）；值不会被打印。
+> 手动 `set -a; source ~/.schemafence.env; set +a` 依旧可用，两种方式不冲突。
+>
+> **key 和端点必须是同一家**。拿着 A 家的 key 打 B 家的端点是 401 的头号来源——
+> 启动 header 会显式提醒"模型是百炼默认值但端点不是百炼"这类错配。
+>
+> **关于 `dimensions` 参数**：agent 默认**不发送**它。只有 Matryoshka 类模型支持自定义维度
+> （`text-embedding-v3/v4`、Qwen3-Embedding、OpenAI `text-embedding-3-*`）；
+> 固定维度模型（如 `BAAI/bge-m3`）收到这个字段会直接报 400。
+> 需要时显式设置 `SF_EMBED_DIMENSIONS=1536`（前提是模型支持该维度，且表要按新维度重建）。
+> 维度对不上时入库/查询会显式报错，不会静默错配。
 
 ### A.3 验证 key 通了
 
@@ -719,7 +743,8 @@ python agent_cli.py --llm openai --ask "PG 里表膨胀怎么处理"   # driver 
 
 | 模型 | 维度 | 建表时 |
 |---|---|---|
-| `text-embedding-v3` | 1024 | `VECTOR(1024)` ✅ |
+| `text-embedding-v3`（百炼） | 1024 | `VECTOR(1024)` ✅ |
+| `BAAI/bge-m3`（硅基流动） | 1024 | `VECTOR(1024)` ✅ |
 | OpenAI `text-embedding-3-small` | 1536 | 需要 `--dim 1536` 并**重建表** |
 
 > 维度不一致的报错是 `expected 1024 dimensions, not 1536`。换模型必须重建库（`DROP TABLE doc_chunks` 再 `--ingest`）。

@@ -28,6 +28,7 @@ import json
 import math
 import os
 import re
+import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -202,8 +203,38 @@ class Embedder:
             headers={"Content-Type": "application/json",
                      "Authorization": f"Bearer {self.api_key}"},
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            hints = {
+                400: "the request was rejected — most often the `dimensions` "
+                     "field is not supported by this model (e.g. BAAI/bge-m3 "
+                     "on SiliconFlow, a fixed-1024 model).  Leave "
+                     "SF_EMBED_DIMENSIONS unset; the provider's exact "
+                     "complaint is in the body above",
+                401: "the key was rejected.  A non-empty SF_EMBED_API_KEY was sent, so "
+                     "check the VALUE: is it a DashScope key for THIS endpoint "
+                     f"({self.base_url})?  A key from another provider, a truncated "
+                     "copy, or stray quotes/whitespace all land here.  Try:  "
+                     "curl -s $SF_EMBED_BASE_URL/embeddings -H \"Authorization: Bearer "
+                     "$SF_EMBED_API_KEY\" -H 'Content-Type: application/json' "
+                     "-d '{\"model\":\"...\",\"input\":[\"hi\"]}'  — the JSON body in "
+                     "the message above names the exact code (InvalidApiKey etc.)",
+                403: "the key is valid but not allowed to call this model "
+                     "(not activated, or out of quota)",
+                404: f"no such model or path: {self.model} @ {self.base_url}",
+                429: "rate limited — retry with backoff",
+            }
+            raise RuntimeError(
+                f"embeddings API returned HTTP {e.code} for {self.base_url}/embeddings\n"
+                f"  body  : {detail}\n"
+                f"  likely: {hints.get(e.code, 'see the body above')}") from None
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"cannot reach {self.base_url} ({e.reason}) — network, DNS, or "
+                "wrong SF_EMBED_BASE_URL") from None
         data = sorted(body["data"], key=lambda d: d.get("index", 0))
         vecs = [d["embedding"] for d in data]
         if vecs and len(vecs[0]) != self.dim:

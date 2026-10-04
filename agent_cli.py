@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -28,16 +29,52 @@ if str(ROOT) not in sys.path:
 
 from schemafence import parse_ddl                                    # noqa: E402
 from schemafence.agent import LLMClient, route_reasons, run_agent      # noqa: E402
-from schemafence.knowledge import (Embedder, JsonStore, PgStore,             # noqa: E402
-                                   build_idf, ingest_directory, load_idf,
-                                   read_corpus, save_idf)
+from schemafence.knowledge import (DEFAULT_EMBED_MODEL, Embedder, JsonStore,  # noqa: E402
+                                   PgStore, build_idf, ingest_directory,
+                                   load_idf, read_corpus, save_idf)
 from schemafence.tools import Toolbox                                  # noqa: E402
 
 WIDTH = 74
+ENV_FILE = Path.home() / ".schemafence.env"
 DEFAULT_CORPUS = ROOT / "examples" / "knowledge"
 DEFAULT_STORE = ROOT / ".schemafence" / "knowledge.json"
 DEFAULT_EVAL = ROOT / "eval" / "questions.md"
 DEFAULT_SCHEMA = ROOT / "examples" / "sample_schema.sql"
+
+
+def load_env_file(path: Path = ENV_FILE) -> list[str]:
+    """Apply SF_* settings from ~/.schemafence.env, without hiding real env vars.
+
+    The handbook keeps keys in this file and tells readers to `source` it by
+    hand; in practice people forget the source (or the `set -a`), and the run
+    then silently mixes one provider's key with another provider's endpoint —
+    which is exactly how a SiliconFlow key ended up hitting DashScope and
+    getting HTTP 401.  Loading it here removes that failure mode.  Rules:
+
+      - only SF_* keys are applied (this file is not a general dotenv);
+      - variables already in the environment win (setdefault), so a one-off
+        `SF_EMBED_MODEL=x python agent_cli.py ...` still overrides;
+      - values are never printed, only names.
+    """
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    applied: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key.startswith("SF_") and key and key not in os.environ:
+            os.environ[key] = value
+            applied.append(key)
+    return applied
 
 
 def rel(path) -> str:
@@ -70,8 +107,15 @@ def heading(text: str) -> None:
 # --------------------------------------------------------------------------- #
 
 def make_embedder(args) -> Embedder:
-    return Embedder(mode=args.mode, dim=args.dim,
-                    dimensions=args.dim if args.mode == "api" else None)
+    # `dimensions` is a Matryoshka-model feature (text-embedding-v3/v4,
+    # Qwen3-Embedding, OpenAI text-embedding-3-*).  Fixed-dim models such as
+    # BAAI/bge-m3 reject the field outright with HTTP 400, so it is sent only
+    # when explicitly asked for.  A store-dim mismatch is caught anyway by the
+    # loud check on the response — that check is the contract, this field is
+    # just an optimisation for models that can honour it.
+    raw = os.environ.get("SF_EMBED_DIMENSIONS", "").strip()
+    dimensions = int(raw) if raw.isdigit() else None
+    return Embedder(mode=args.mode, dim=args.dim, dimensions=dimensions)
 
 
 def idf_sidecar(args) -> Path:
@@ -205,6 +249,19 @@ def cmd_ask(args, embedder: Embedder) -> int:
                       trace_path=args.trace, max_rows=args.max_rows)
     schema = load_schema(args)
     llm = LLMClient() if args.llm != "rules" else None
+    if llm is not None:
+        # Same failure class as the embedding 401: a key from one provider sent
+        # to another provider's endpoint, or a model name that only exists on
+        # one of them.  Say it before the first HTTP call instead of after.
+        if llm.model == "deepseek-chat" and "deepseek" not in llm.base_url:
+            print(f"  note: model 'deepseek-chat' is the DeepSeek default but the "
+                  f"endpoint is {llm.base_url} — set SF_LLM_MODEL (e.g. "
+                  f"Qwen/Qwen3-8B or deepseek-ai/DeepSeek-V3.2 on SiliconFlow, "
+                  f"both support function calling).")
+        if not llm.available:
+            print("  note: --llm openai needs SF_LLM_API_KEY — falling back to "
+                  "the rule-based router.")
+            llm = None
 
     for question in args.ask:
         heading(f"[ask] {question}")
@@ -552,7 +609,7 @@ def cmd_report(args, embedder: Embedder) -> int:
     return 0
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent_cli.py",
         description="A hand-written database agent: knowledge retrieval, read-only "
@@ -585,17 +642,35 @@ def main(argv=None) -> int:
     parser.add_argument("--llm", default="rules", choices=["rules", "openai"],
                         help="rules = deterministic router; openai = function calling")
     parser.add_argument("--trace", default="agent_trace.jsonl")
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if not any([args.ingest, args.ask, args.eval, args.tune, args.report, args.genq]):
         parser.print_help()
         return 0
 
+    applied = load_env_file(ENV_FILE)
     embedder = make_embedder(args)
     print("schemafence agent — the constraint layer, now with a memory")
+    if applied:
+        print(f"env file   : {ENV_FILE} sets {', '.join(applied)}")
+    elif ENV_FILE.exists():
+        print(f"env file   : {ENV_FILE} (found, nothing new applied)")
+    else:
+        print(f"env file   : {ENV_FILE} not found — keys come from the "
+              f"environment only (see handbook appendix A)")
     print(f"embedding : {embedding_line(args, embedder)}")
     print(f"storage   : {'pgvector ' + args.db if args.db else 'json ' + args.store}")
     print(f"driver    : {'model function calling' if args.llm == 'openai' else 'rules'}")
+    if embedder.mode == "api" and embedder.model == DEFAULT_EMBED_MODEL \
+            and "dashscope" not in embedder.base_url:
+        print(f"  note: model '{embedder.model}' is the DashScope default but the "
+              f"endpoint is {embedder.base_url} — most providers will reject it. "
+              f"Set SF_EMBED_MODEL (e.g. BAAI/bge-m3 on SiliconFlow, also 1024d).")
 
     if args.ingest:
         return cmd_ingest(args, embedder)
