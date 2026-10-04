@@ -123,6 +123,7 @@ statement it produces still goes through `guard()`.
 python agent_cli.py --ingest examples/knowledge     # chunk → embed → store
 python agent_cli.py --ask "PG 里表膨胀怎么治理？"
 python agent_cli.py --eval                          # top-k retrieval hit rate
+python agent_cli.py --genq                          # draft eval questions from the corpus
 python agent_cli.py --tune                          # chunk × overlap × top-k
 python agent_cli.py --report eval/report.md         # writes the numbers down
 ```

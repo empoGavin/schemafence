@@ -195,6 +195,134 @@ def load_questions(path: Path) -> list[tuple[str, str]]:
     return rows
 
 
+# --------------------------------------------------------------------------- #
+# --genq: turn "I would have to write a question bank" into "edit a draft"
+# --------------------------------------------------------------------------- #
+
+# Heading-word → question template.  Ordered: first match wins per heading.
+_CUES = [
+    (("成因", "为什么"),        "{t}是怎么产生的？"),
+    (("怎么防",),               "{t}应该怎么防？"),
+    (("治理", "处理", "手段", "解决"), "{t}应该怎么处理？"),
+    (("定位", "排查", "故障", "卡死"), "{t}出了问题怎么排查？"),
+    (("风险", "误区", "低估", "坑"),   "{t}有哪些常见的坑？"),
+    (("选型", "权衡", "设计"),  "{t}做设计决策时要权衡什么？"),
+    (("阶段", "流程", "步骤"),  "{t}应该分几步推进？"),
+    (("有效", "效果", "判断"),  "怎么判断{t}做得好不好？"),
+]
+_FALLBACK = "关于{t}，笔记的核心结论是什么？"
+
+
+def _topic(h1: str) -> str:
+    """The bare subject of a note title: '表膨胀（table bloat）的成因与治理' → '表膨胀'."""
+    t = h1.split("（")[0].split("(")[0]
+    t = t.split("：")[0].split(":")[0].strip()      # '半夜卡死：15 分钟定位流程' → '半夜卡死'
+    for suffix in ("的成因与治理", "的排查与定位", "与生命周期管理", "的成因",
+                   "的治理", "的处理", "笔记", "方法论", "的排查", "排查"):
+        if t.endswith(suffix) and len(t) > len(suffix):
+            t = t[: -len(suffix)].strip()
+    return t or h1
+
+
+def _scan_corpus(directory: Path) -> list[tuple[str, str, list[str]]]:
+    """(source name, H1 topic, H2 headings) per markdown file."""
+    docs = []
+    for path in sorted(directory.glob("*.md")):
+        h1, h2s = "", []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("# ") and not h1:
+                h1 = line[2:].strip()
+            elif line.startswith("## "):
+                h2s.append(line[3:].strip())
+        if h1:
+            docs.append((path.stem, _topic(h1), h2s))
+    return docs
+
+
+def cmd_genq(args, embedder: Embedder) -> int:
+    """Generate eval/questions.draft.md — one or two draft questions per note.
+
+    The point is not that a template can write good questions.  It cannot.
+    The point is that the expensive part of an eval set is not the wording,
+    it is the gold labels and the coverage — which file must be watched by
+    at least one question — and that part is fully mechanical.
+    """
+    heading("[genq] draft question set from the corpus")
+    corpus = Path(args.corpus)
+    docs = _scan_corpus(corpus)
+    if not docs:
+        print(f"  no markdown documents under {corpus}")
+        return 2
+
+    out = Path(args.genq)
+    rows: list[str] = []
+    for source, topic, h2s in docs:
+        made: list[str] = []
+        for h2 in h2s:
+            if len(made) >= 2:
+                break
+            for keys, template in _CUES:
+                if any(k in h2 for k in keys):
+                    question = template.format(t=topic)
+                    if question not in made:        # two headings, same question → one row
+                        made.append(question)
+                    break
+        if not made:
+            made.append(_FALLBACK.format(t=topic))
+        for question in made:
+            rows.append(f"| {len(rows) + 1} | {question} | {source} |")
+
+    lines = [
+        "# 评测题库草稿（--genq 自动生成，改完再并入 questions.md）",
+        "",
+        f"- 语料：{rel(corpus)}（{len(docs)} 篇笔记）",
+        "",
+        "## 这份草稿怎么用（三步，预计 10 分钟）",
+        "",
+        "1. **删**：任何你不会那样问的题，直接删掉——评测题必须是真实问法，",
+        "   不是模板句。留下你觉得\"这是我真会问的\"的那些。",
+        "2. **改**：把模板腔改成你平时说话的问法（\"表膨胀应该怎么处理？\"",
+        "   → \"PG 里表膨胀怎么治？\"），问法越像你真实提问，命中率越可信。",
+        "3. **补**：加上模板生成不了的三类题——真实故障、真实权衡、",
+        "   本公司具体场景（脱敏）。这三类才是面试时最有说服力的。",
+        "",
+        "> 题库的作用是**量尺**，不是**门槛**：它不需要覆盖你未来会问的一切，",
+        "> 它只需要稳定——下次改切片、换嵌入、加语料之后，同一套题重跑，",
+        "> 看命中率是涨是跌。这正是回归测试的思路。",
+        "",
+        "## 草稿（每篇笔记至少 1 题，先保覆盖、再抠问法）",
+        "",
+        "| # | 问题 | 期望来源 |",
+        "|---|------|---------|",
+    ]
+    lines += rows
+    lines += [
+        "",
+        "## 改完之后",
+        "",
+        "```bash",
+        "python agent_cli.py --eval-file eval/questions.draft.md --eval   # 先试跑",
+        "# 满意后把表粘进 eval/questions.md（或直接 --eval-file 指向草稿文件）",
+        "```",
+        "",
+    ]
+
+    out.write_text("\n".join(lines), encoding="utf-8")
+    per_doc: dict[str, int] = {}
+    for row in rows:
+        gold = row.strip().strip("|").split("|")[-1].strip()
+        per_doc[gold] = per_doc.get(gold, 0) + 1
+    print(f"  corpus     : {rel(corpus)} ({len(docs)} notes)")
+    print(f"  draft      : {out}  ({len(rows)} draft questions)")
+    for source, count in per_doc.items():
+        print(f"    {source:<36} {count}")
+    print()
+    print("  what this gave you: coverage + gold labels, for free.")
+    print("  what it did NOT give you: your real phrasing.  Edit the draft —")
+    print("  a question you would never ask has no place in an eval set.")
+    return 0
+
+
 def evaluate(store, embedder: Embedder, questions, k: int) -> dict:
     hits, ranks, misses = 0, [], []
     elapsed = 0.0
@@ -390,6 +518,8 @@ def main(argv=None) -> int:
     parser.add_argument("--ask", action="append", metavar="QUESTION",
                         help="ask the agent (repeatable)")
     parser.add_argument("--eval", action="store_true", help="measure retrieval hit rate")
+    parser.add_argument("--genq", metavar="PATH", nargs="?", const="eval/questions.draft.md",
+                        help="generate a draft question set from the corpus (edit it, then eval against it)")
     parser.add_argument("--tune", action="store_true", help="chunk/overlap/k comparison")
     parser.add_argument("--report", metavar="PATH",
                         help="write eval/report.md with the numbers already filled in")
@@ -413,7 +543,7 @@ def main(argv=None) -> int:
     parser.add_argument("--trace", default="agent_trace.jsonl")
     args = parser.parse_args(argv)
 
-    if not any([args.ingest, args.ask, args.eval, args.tune, args.report]):
+    if not any([args.ingest, args.ask, args.eval, args.tune, args.report, args.genq]):
         parser.print_help()
         return 0
 
@@ -427,6 +557,8 @@ def main(argv=None) -> int:
         return cmd_ingest(args, embedder)
     if args.ask:
         return cmd_ask(args, embedder)
+    if args.genq:
+        return cmd_genq(args, embedder)
     if args.eval:
         return cmd_eval(args, embedder)
     if args.report:
