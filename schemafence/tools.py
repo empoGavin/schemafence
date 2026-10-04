@@ -239,13 +239,25 @@ class Toolbox:
             return {"ok": False, "error": "knowledge store not loaded — run --ingest first"}
         k = max(1, min(int(k or 5), 20))
         embedder = getattr(self.store, "embedder", None)
-        if embedder is not None:
-            hits = self.store.search(embedder.one(query), k=k)
-        else:
-            from .knowledge import embed_offline
-            hits = self.store.search(
-                embed_offline(query, getattr(self.store, "dim", 1024),
-                              getattr(self.store, "idf", None) or None), k=k)
+        try:
+            if embedder is not None:
+                hits = self.store.search(embedder.one(query), k=k)
+            else:
+                from .knowledge import embed_offline
+                hits = self.store.search(
+                    embed_offline(query, getattr(self.store, "dim", 1024),
+                                  getattr(self.store, "idf", None) or None), k=k)
+        except Exception as exc:
+            # A missing doc_chunks table is deterministic, and the raw
+            # UndefinedTable gives the model nothing to act on — it just
+            # retried four times, each paying for an embedding request.
+            # Name the operator's fix and tell the model to stop.
+            if type(exc).__name__ == "UndefinedTable":
+                return {"ok": False, "error":
+                        f"the knowledge store is not initialised: {exc} — "
+                        "run agent_cli.py --ingest first. Do not retry "
+                        "search_docs until the operator has done that."}
+            raise
         return {"ok": True, "hits": [
             {"source": h.source, "section": h.section, "score": h.score,
              "snippet": _clip(h.content)} for h in hits], "k": k}

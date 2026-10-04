@@ -270,23 +270,25 @@ def _tool_message(call_id: str, payload: dict) -> dict:
 
 
 def _schema_catalogue(schema) -> str:
-    """One line per table, qualified names only.
+    """One line per table: qualified name, columns *with their exact types*.
 
     The model cannot guess which schema the tables live in — it wrote
     `FROM orders` and then tried `schema=public`, and both failed because
-    the demo schema is `shop`.  A catalogue costs a few hundred tokens and
-    removes an entire failure class; the qualified-name instruction matters
-    because search_path may not cover the schema either.
+    the demo schema is `shop`.  Names alone were not enough either: with
+    only a column list the model wrote `status = 'completed'` against a
+    smallint column and lost the whole EXPLAIN.  Types cost a few dozen
+    more tokens and remove a second failure class.
     """
     if schema is None or not getattr(schema, "tables", None):
         return ""
     lines = []
     for t in schema.tables:
-        cols = ", ".join(c.name for c in t.columns)
+        cols = ", ".join(f"{c.name} {c.type}" for c in t.columns)
         note = f"  -- {t.comment}" if t.comment else ""
         lines.append(f"  - {t.qualified} ({cols}){note}")
-    return ("\n\nSchema catalogue — use these EXACT qualified names; unqualified\n"
-            "table names fail because search_path does not include the schema:\n"
+    return ("\n\nSchema catalogue — use these EXACT qualified names (unqualified\n"
+            "table names fail because search_path does not include the schema)\n"
+            "and write literals that match the listed column types:\n"
             + "\n".join(lines) + "\n")
 
 
@@ -295,6 +297,11 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
     run = AgentRun(question=question, driver=f"model / {llm.model}")
     messages = [{"role": "system", "content": AGENT_SYSTEM + _schema_catalogue(schema)},
                 {"role": "user", "content": question}]
+    # A failed call keyed by (tool, arguments).  The failure of a missing
+    # doc_chunks table or a bad literal is deterministic — rerunning the same
+    # call burns a round, an embedding request and the budget, and produces
+    # the identical error.  The model must change approach or conclude.
+    failed: dict[str, str] = {}
 
     for round_no in range(1, max_rounds + 1):
         run.rounds = round_no
@@ -325,9 +332,22 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
                 args = json.loads(call["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
+            key = name + "|" + json.dumps(args, ensure_ascii=False, sort_keys=True)
+            if key in failed:
+                messages.append(_tool_message(call.get("id", name), {
+                    "error": failed[key],
+                    "hint": "you already ran this exact call and it failed the same "
+                            "way — repeating it will not help and wastes the tool "
+                            "budget. Change the approach, or answer now from the "
+                            "evidence you already have.",
+                }))
+                continue
             result = toolbox.call(name, args)
             run.steps.append(Step(name, args, result.data, result.ok,
                                   result.ms, result.brief()))
+            if not result.ok:
+                failed[key] = (result.data.get("error")
+                               or result.data.get("reason") or "failed")
             payload = result.data if result.ok else {
                 "error": result.data.get("error") or result.data.get("reason"),
                 "hint": "fix the query and try once more, or explain why you cannot"}
