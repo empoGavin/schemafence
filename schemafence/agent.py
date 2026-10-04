@@ -52,6 +52,16 @@ Hard rules:
 Prefer searching the knowledge base for questions about practice and
 experience, and prefer querying the catalogue for questions about the
 current state of the data.
+
+Diagnosing slowness has a fixed order, and skipping steps produces wrong
+answers:
+  1. read the plan (explain_sql);
+  2. check the table's stats (get_table_stats) — a large dead_tuples count
+     next to live_tuples means bloat, and bloat makes a sequential scan
+     read far more pages than the live rows justify;
+  3. search the knowledge base for the matching method note;
+  4. only then suggest fixes — and never suggest a new index before
+     ruling out bloat, because an index on a bloated table helps nobody.
 """
 
 DESTRUCTIVE = ("删掉", "删除", "清空", "清除", "改一下", "改掉", "drop", "delete",
@@ -117,7 +127,14 @@ class Step:
     def render(self, index: int) -> str:
         mark = "ok " if self.ok else "!! "
         head = f"  {mark}{index}. {self.tool}({_short(self.args)})"
-        return f"{head}\n      → {self.summary}  [{self.ms:.0f} ms]"
+        out = f"{head}\n      → {self.summary}  [{self.ms:.0f} ms]"
+        # An EXPLAIN result IS the evidence — print every line, not just the
+        # one-line summary, or the user watches the model reason about a plan
+        # they never saw.
+        plan = self.result.get("plan") if isinstance(self.result, dict) else None
+        if plan:
+            out += "\n" + "\n".join(f"      {line}" for line in plan)
+        return out
 
 
 @dataclass

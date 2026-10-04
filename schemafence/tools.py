@@ -282,7 +282,7 @@ class Toolbox:
         if self.conn is None:
             return {"ok": False, "blocked": False, "error":
                     "no database attached — start PostgreSQL and pass --db"}
-        _columns, rows = self._execute(verdict.sql, verdict.session_sql)
+        _columns, rows = self._execute(verdict.sql, verdict.session_sql, clip=False)
         return {"ok": True, "plan": [r[0] for r in rows]}
 
     def get_table_stats(self, schema: str | None = None, table: str | None = None) -> dict:
@@ -300,7 +300,8 @@ class Toolbox:
             return {"ok": False, "blocked": False, "error":
                     "no database attached — start PostgreSQL and pass --db"}
 
-        columns, rows = self._execute(verdict.sql, verdict.session_sql, params)
+        columns, rows = self._execute(verdict.sql, verdict.session_sql, params,
+                                      clip=False)
         out = []
         for row in rows:
             record = dict(zip(columns, row))
@@ -323,11 +324,17 @@ class Toolbox:
 
     # -- execution ---------------------------------------------------------- #
 
-    def _execute(self, sql: str, session_sql: list[str], params: dict | None = None):
+    def _execute(self, sql: str, session_sql: list[str], params: dict | None = None,
+                 clip: bool = True):
         """Apply the database-side half of the guardrail, then run the query.
 
         ``default_transaction_read_only`` is layer 8 on purpose: even if the
         string checker were bypassed, the session still cannot write.
+
+        ``clip`` is for *display* paths.  Callers that consume the values as
+        numbers (get_table_stats) or as multi-line text (EXPLAIN plans) must
+        pass clip=False — a clipped cell turns total_bytes into a string and
+        human_bytes dies on ``n < 1024.0``.
         """
         with self.conn.cursor() as cur:
             if self.search_path:
@@ -337,4 +344,6 @@ class Toolbox:
             cur.execute(sql, params)
             columns = [d.name for d in (cur.description or [])]
             rows = cur.fetchall() if cur.description else []
-        return columns, [[_clip(v) for v in row] for row in rows[:self.max_rows]]
+        if clip:
+            return columns, [[_clip(v) for v in row] for row in rows[:self.max_rows]]
+        return columns, list(rows[:self.max_rows])
