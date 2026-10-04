@@ -301,11 +301,17 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
     run = AgentRun(question=question, driver=f"model / {llm.model}")
     messages = [{"role": "system", "content": AGENT_SYSTEM + _schema_catalogue(schema)},
                 {"role": "user", "content": question}]
-    # A failed call keyed by (tool, arguments).  The failure of a missing
-    # doc_chunks table or a bad literal is deterministic — rerunning the same
-    # call burns a round, an embedding request and the budget, and produces
-    # the identical error.  The model must change approach or conclude.
-    failed: dict[str, str] = {}
+    # Session memory keyed by (tool, arguments).  Two deterministic facts:
+    # a *failed* call reruns into the identical error, and a *successful*
+    # call returns the identical result — in a read-only agent neither is
+    # worth a second execution.  The last VM run showed Qwen3-8B calling
+    # search_docs four times with the same arguments, each hit paying for
+    # an embedding request, until the budget died with no answer written.
+    # Successful repeats get the cached payload plus a use-it-and-move-on
+    # note; failed repeats get the don't-retry message.  Either way the
+    # call does not execute again, and a round made entirely of repeats
+    # trips the loop-breaker below.
+    seen: dict[str, dict] = {}
 
     for round_no in range(1, max_rounds + 1):
         run.rounds = round_no
@@ -338,31 +344,40 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
             except json.JSONDecodeError:
                 args = {}
             key = name + "|" + json.dumps(args, ensure_ascii=False, sort_keys=True)
-            if key in failed:
-                messages.append(_tool_message(call.get("id", name), {
-                    "error": failed[key],
-                    "hint": "you already ran this exact call and it failed the same "
-                            "way — repeating it will not help and wastes the tool "
-                            "budget. Change the approach, or answer now from the "
-                            "evidence you already have.",
-                }))
+            if key in seen:
+                prior = seen[key]
+                if prior.get("ok"):
+                    payload = dict(prior)
+                    payload["cached"] = True
+                    payload["note"] = ("you already ran this exact call; this is the "
+                                       "cached result — do not call it again, use it "
+                                       "and move on to the next step or answer")
+                else:
+                    payload = {"error": prior.get("error"),
+                               "hint": "you already ran this exact call and it failed "
+                                       "the same way — repeating it will not help. "
+                                       "Change the approach, or answer now from the "
+                                       "evidence you already have."}
+                messages.append(_tool_message(call.get("id", name), payload))
                 continue
             executed_any = True
             result = toolbox.call(name, args)
             run.steps.append(Step(name, args, result.data, result.ok,
                                   result.ms, result.brief()))
-            if not result.ok:
-                failed[key] = (result.data.get("error")
-                               or result.data.get("reason") or "failed")
+            if result.ok:
+                seen[key] = result.data
+            else:
+                seen[key] = {"error": (result.data.get("error")
+                                       or result.data.get("reason") or "failed")}
             payload = result.data if result.ok else {
                 "error": result.data.get("error") or result.data.get("reason"),
                 "hint": "fix the query and try once more, or explain why you cannot"}
             messages.append(_tool_message(call.get("id", name), payload))
 
-        # Every call this round was a blocked repeat — the model is looping on
-        # a deterministic failure and the hint did not move it.  Take the
-        # tools away so its only move is a plain-text answer; if it still
-        # returns nothing, assemble the evidence mechanically.
+        # Every call this round was a cached repeat — success or failure, the
+        # model is looping on something already answered.  Take the tools
+        # away so its only move is a plain-text answer; if it still returns
+        # nothing, assemble the evidence mechanically.
         if calls and not executed_any:
             final = llm.chat(messages)
             run.answer = (re.sub(r"<think>.*?</think>", "",
