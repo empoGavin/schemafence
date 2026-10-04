@@ -37,8 +37,6 @@ case "$MODE" in
     ROWS="${ROWS:-100000}"
     PASSES="${PASSES:-5}"
     psql "$DSN" -v ON_ERROR_STOP=1 <<SQL
-\set rows ${ROWS}
-\set passes ${PASSES}
 \echo '== 1) autovacuum off for shop.orders (it must not clean up mid-demo) =='
 ALTER TABLE shop.orders SET (autovacuum_enabled = off);
 
@@ -52,19 +50,21 @@ EXPLAIN (COSTS ON) SELECT * FROM shop.orders;
 SELECT count(*), round(sum(amount)::numeric, 2) FROM shop.orders;
 \timing off
 
-\echo '== 3) bulk insert' :rows 'rows =='
+\echo '== 3) bulk insert' ${ROWS} 'rows =='
 INSERT INTO shop.orders (user_id, status, amount, currency, create_time)
 SELECT g % 1000,
        CASE WHEN g % 3 = 0 THEN 30 ELSE 20 END,
        round((g % 500)::numeric, 2)::double precision,
        'CNY',
        now() - (g || ' minutes')::interval
-  FROM generate_series(1, :rows) AS g;
+  FROM generate_series(1, ${ROWS}) AS g;
 
-\echo '== 4) churn:' :passes 'full-table UPDATE passes -> dead tuples =='
+\echo '== 4) churn:' ${PASSES} 'full-table UPDATE passes -> dead tuples =='
+\echo '   (psql :var substitution does NOT work inside \$\$ dollar quotes,'
+\echo '    so the loop bound is expanded by the shell instead)'
 DO \$\$
 BEGIN
-  FOR i IN 1..:passes LOOP
+  FOR i IN 1..${PASSES} LOOP
     UPDATE shop.orders
        SET status = CASE WHEN status = 20 THEN 30 ELSE 20 END;
     RAISE NOTICE 'churn pass % done', i;
