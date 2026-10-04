@@ -59,9 +59,13 @@ answers:
   2. check the table's stats (get_table_stats) — a large dead_tuples count
      next to live_tuples means bloat, and bloat makes a sequential scan
      read far more pages than the live rows justify;
-  3. search the knowledge base for the matching method note;
-  4. only then suggest fixes — and never suggest a new index before
-     ruling out bloat, because an index on a bloated table helps nobody.
+  3. search the knowledge base (search_docs) for the matching method note.
+     This step is NOT optional: strong priors make common topics feel
+     familiar, but the runbook carries the operational warnings memory
+     does not have (lock levels, repack trade-offs, in-house thresholds);
+  4. only then suggest fixes — cite the passage you found (or say plainly
+     that none matched), and never suggest a new index before ruling out
+     bloat, because an index on a bloated table helps nobody.
 """
 
 DESTRUCTIVE = ("删掉", "删除", "清空", "清除", "改一下", "改掉", "drop", "delete",
