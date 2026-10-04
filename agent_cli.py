@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""One entry point for the whole agent: ingest, ask, evaluate, tune.
+
+    python agent_cli.py --ingest examples/knowledge
+    python agent_cli.py --ask "PG 里表膨胀怎么处理？"
+    python agent_cli.py --ask "有几条订单？"          # needs --db to return rows
+    python agent_cli.py --eval
+    python agent_cli.py --tune
+    python agent_cli.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo \
+                        --ingest examples/knowledge
+
+Offline (no --db, no key) uses a JSON store and a lexical hashed embedding:
+clone it, run it, see the whole loop work.  Adding a key or a database swaps
+one backend at a time — the loop, the tools and the guard never change.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from schemafence import parse_ddl                                    # noqa: E402
+from schemafence.agent import LLMClient, route_reasons, run_agent      # noqa: E402
+from schemafence.knowledge import (Embedder, JsonStore, PgStore,             # noqa: E402
+                                   build_idf, ingest_directory, load_idf,
+                                   read_corpus, save_idf)
+from schemafence.tools import Toolbox                                  # noqa: E402
+
+WIDTH = 74
+DEFAULT_CORPUS = ROOT / "examples" / "knowledge"
+DEFAULT_STORE = ROOT / ".schemafence" / "knowledge.json"
+DEFAULT_EVAL = ROOT / "eval" / "questions.md"
+DEFAULT_SCHEMA = ROOT / "examples" / "sample_schema.sql"
+
+
+def rel(path) -> str:
+    """A path as it should appear in a committed file: relative to the repo.
+
+    The report is part of the repository, and the repository is public.  An
+    absolute path puts the author's home directory into the artefact — noise
+    for anyone reading it, and a link that breaks the moment someone clones
+    this somewhere else.  Paths outside the repo keep their name only.
+    """
+    p = Path(path)
+    try:
+        return p.resolve().relative_to(ROOT).as_posix()
+    except (ValueError, OSError):
+        return p.name if p.name else str(p)
+
+
+def rule(char: str = "─") -> None:
+    print(char * WIDTH)
+
+
+def heading(text: str) -> None:
+    print()
+    print(text)
+    rule()
+
+
+# --------------------------------------------------------------------------- #
+# plumbing
+# --------------------------------------------------------------------------- #
+
+def make_embedder(args) -> Embedder:
+    return Embedder(mode=args.mode, dim=args.dim,
+                    dimensions=args.dim if args.mode == "api" else None)
+
+
+def idf_sidecar(args) -> Path:
+    return Path(args.store).parent / "idf.json"
+
+
+def open_store(args, embedder: Embedder, create: bool = False):
+    """Open whichever backend the flags ask for, and make sure the query
+    side uses the same feature weights the ingest side used."""
+    if args.db:
+        store = PgStore(args.db, embedder)
+        if create:
+            store.ensure_schema(with_index=not args.no_index)
+        if embedder.mode == "offline" and not embedder.idf:
+            embedder.idf = load_idf(idf_sidecar(args))
+        return store
+
+    store = JsonStore.load(args.store, dim=args.dim)
+    if embedder.mode == "offline" and not embedder.idf:
+        embedder.idf = store.idf
+    store.embedder = embedder
+    return store
+
+
+def load_schema(args):
+    """The router needs a schema to turn a question into SQL."""
+    if args.db:
+        try:
+            from schemafence import snapshot
+            conn = snapshot.connect(args.db)
+            with conn:
+                return snapshot.read_schema(conn)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  (could not read the live catalogue: {exc} — using the sample DDL)")
+    return parse_ddl(Path(DEFAULT_SCHEMA).read_text(encoding="utf-8"))
+
+
+def attach_database(args, store):
+    if not args.db:
+        return None
+    if isinstance(store, PgStore):
+        return store.conn
+    from schemafence import snapshot
+    return snapshot.connect(args.db)
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+
+def cmd_ingest(args, embedder: Embedder) -> int:
+    heading("[ingest] chunk → embed → store")
+    corpus = Path(args.ingest)
+    started = time.perf_counter()
+    store = open_store(args, embedder, create=True)
+    chunks = ingest_directory(corpus, store, embedder=embedder,
+                              target_tokens=args.chunk, overlap_tokens=args.overlap)
+    elapsed = time.perf_counter() - started
+    if isinstance(store, JsonStore):
+        store.save()
+    elif embedder.mode == "offline":
+        save_idf(embedder.idf, idf_sidecar(args))
+        print(f"  idf weights : {len(embedder.idf)} features → {idf_sidecar(args)}")
+
+    stats = store.stats()
+    print(f"  corpus      : {corpus}")
+    print(f"  embedding   : {embedder.label}")
+    print(f"  chunk size  : {args.chunk} tokens, overlap {args.overlap}")
+    print(f"  documents   : {stats['documents']}")
+    print(f"  chunks      : {stats['chunks']}   avg {stats['avg_tokens']} tokens")
+    print(f"  wall time   : {elapsed:.2f}s")
+    if isinstance(store, PgStore):
+        print(f"  table       : doc_chunks, {stats.get('table_size')}")
+        store.close()
+    else:
+        print(f"  store       : {store.path}")
+    return 0
+
+
+def cmd_ask(args, embedder: Embedder) -> int:
+    store = open_store(args, embedder)
+    if isinstance(store, JsonStore) and not store.chunks:
+        print(f"  the store is empty — run:  python agent_cli.py --ingest {DEFAULT_CORPUS}")
+        return 2
+
+    conn = attach_database(args, store)
+    toolbox = Toolbox(store=store, conn=conn, whitelist=args.whitelist or None,
+                      trace_path=args.trace, max_rows=args.max_rows)
+    schema = load_schema(args)
+    llm = LLMClient() if args.llm != "rules" else None
+
+    for question in args.ask:
+        heading(f"[ask] {question}")
+        for reason in route_reasons(question, schema):
+            print(f"  · {reason}")
+        print()
+        result = run_agent(question, toolbox, schema=schema, llm=llm)
+        for index, step in enumerate(result.steps, 1):
+            print(step.render(index))
+        print()
+        print(f"  driver: {result.driver}   rounds: {result.rounds}   "
+              f"{result.ms:.0f} ms")
+        print()
+        for line in result.answer.splitlines():
+            print(f"  {line}")
+    print()
+    print(f"  audit trail appended to {args.trace}")
+    return 0
+
+
+def load_questions(path: Path) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or cells[0] in {"#", ""} or set(cells[0]) <= set("-: "):
+            continue
+        rows.append((cells[1], cells[2]))
+    return rows
+
+
+def evaluate(store, embedder: Embedder, questions, k: int) -> dict:
+    hits, ranks, misses = 0, [], []
+    elapsed = 0.0
+    for question, gold in questions:
+        started = time.perf_counter()
+        found = store.search(embedder.one(question), k=k)
+        elapsed += time.perf_counter() - started
+        rank = next((i for i, hit in enumerate(found, 1) if hit.source == gold), None)
+        ranks.append((question, gold, rank))
+        if rank:
+            hits += 1
+        else:
+            misses.append((question, gold, [h.source for h in found]))
+    return {"hit_rate": hits / len(questions) if questions else 0.0,
+            "avg_ms": 1000 * elapsed / len(questions) if questions else 0.0,
+            "rows": ranks, "misses": misses}
+
+
+def cmd_eval(args, embedder: Embedder) -> int:
+    heading("[eval] top-k retrieval hit rate")
+    questions = load_questions(Path(args.eval_file))
+    if not questions:
+        print(f"  no questions found in {args.eval_file}")
+        return 2
+    store = open_store(args, embedder)
+    if isinstance(store, JsonStore) and not store.chunks:
+        print("  the store is empty — run --ingest first")
+        return 2
+
+    result = evaluate(store, embedder, questions, args.k)
+    print(f"  questions   : {len(questions)}")
+    print(f"  embedding   : {embedder.label}")
+    print(f"  top-k       : {args.k}")
+    print(f"  hit rate    : {result['hit_rate'] * 100:.1f}%")
+    print(f"  avg latency : {result['avg_ms']:.1f} ms")
+    print()
+    for question, gold, rank in result["rows"]:
+        mark = f"hit  (rank {rank})" if rank else "MISS"
+        print(f"  {mark:<14} {question[:44]:<46} → {gold}")
+    if result["misses"]:
+        print()
+        print("  what the misses retrieved instead:")
+        for question, gold, got in result["misses"]:
+            print(f"    {question[:40]}  (want {gold}, got {', '.join(got[:3]) or 'nothing'})")
+    return 0
+
+
+def tune_rows(args, embedder: Embedder, questions) -> list[dict]:
+    """The grid the plan asks for: chunk size x overlap x top-k."""
+    rows: list[dict] = []
+    for chunk in (256, 512, 1024):
+        for overlap in (0, 64, 128):
+            if overlap >= chunk:
+                continue
+            chunks = read_corpus(args.corpus, target_tokens=chunk, overlap_tokens=overlap)
+            if not chunks:
+                raise FileNotFoundError(f"no documents under {args.corpus}")
+            texts = [c.content for c in chunks]
+            if embedder.mode == "offline":
+                embedder.idf = build_idf(texts)
+            vectors = embedder.many(texts)
+            for c, v in zip(chunks, vectors):
+                c.vector = v
+            store = JsonStore(ROOT / ".schemafence" / "_tune.json", dim=embedder.dim)
+            store.embedder = embedder
+            store.replace(chunks)
+            for k in (3, 5, 10):
+                result = evaluate(store, embedder, questions, k)
+                rows.append({"chunk": chunk, "overlap": overlap, "k": k,
+                             "chunks_n": len(chunks),
+                             "hit_rate": result["hit_rate"], "avg_ms": result["avg_ms"]})
+    return rows
+
+
+def cmd_tune(args, embedder: Embedder) -> int:
+    heading("[tune] chunk size × overlap × top-k")
+    questions = load_questions(Path(args.eval_file))
+    if not questions:
+        print("  no eval questions — nothing to tune against")
+        return 2
+    if embedder.mode == "api":
+        print("  note: api embedding — this costs one embedding call per chunk per row")
+    print(f"  {'chunk':>6} {'overlap':>8} {'k':>4} {'pieces':>7} {'hit rate':>10} {'avg ms':>8}")
+    rule()
+    rows = tune_rows(args, embedder, questions)
+    for row in rows:
+        print(f"  {row['chunk']:>6} {row['overlap']:>8} {row['k']:>4} {row['chunks_n']:>7} "
+              f"{row['hit_rate'] * 100:>9.1f}% {row['avg_ms']:>8.1f}")
+
+    spread = max(r["hit_rate"] for r in rows) - min(r["hit_rate"] for r in rows)
+    best = max(rows, key=lambda r: (r["hit_rate"], -r["avg_ms"]))
+    print()
+    print(f"  best: chunk {best['chunk']}, overlap {best['overlap']}, k={best['k']} "
+          f"→ {best['hit_rate'] * 100:.1f}%")
+    if spread == 0:
+        print()
+        print("  ⚠ every configuration scores the same, so this table proves nothing yet.")
+        print(f"    A {len(questions)}-question quiz over {best['chunks_n']} pieces cannot")
+        print("    separate the settings — grow the corpus past ~100 pieces (your own")
+        print("    notes), then run this again and put the real numbers in eval/report.md.")
+    return 0
+
+
+def cmd_report(args, embedder: Embedder) -> int:
+    """Generate eval/report.md — the Day 4 artefact, numbers included."""
+    from datetime import date
+    questions = load_questions(Path(args.eval_file))
+    if not questions:
+        print("  no eval questions")
+        return 2
+    store = open_store(args, embedder)
+    if isinstance(store, JsonStore) and not store.chunks:
+        print("  run --ingest first")
+        return 2
+    result = evaluate(store, embedder, questions, args.k)
+    rows = tune_rows(args, embedder, questions)
+    spread = max(r["hit_rate"] for r in rows) - min(r["hit_rate"] for r in rows)
+    best = max(rows, key=lambda r: (r["hit_rate"], -r["avg_ms"]))
+    stats = store.stats()
+
+    lines = [
+        "# 检索评测报告（Day 4）",
+        "",
+        f"- 生成日期：{date.today().isoformat()}",
+        f"- 语料：{rel(args.corpus)}（{stats['documents']} 篇 / {stats['chunks']} 片，"
+        f"平均 {stats['avg_tokens']} token）",
+        f"- 嵌入：{embedder.label}",
+        f"- 题库：{rel(args.eval_file)}（{len(questions)} 题）",
+        f"- 判定：top-{args.k} 中出现期望来源记为命中",
+        "",
+        "## 1. 顶层结果",
+        "",
+        "| 指标 | 数值 |",
+        "|---|---|",
+        f"| top-{args.k} 命中率 | {result['hit_rate'] * 100:.1f}% |",
+        f"| 平均检索延迟 | {result['avg_ms']:.1f} ms |",
+        f"| 语料规模 | {stats['chunks']} 片 |",
+        "",
+        "> **读数纪律**：命中率必须与语料规模一起报。"
+        "在 16 片的语料上 100%，说明不了任何工程能力；"
+        "自己 3 万字素材进去之后的那组数字才算数。",
+        "",
+        "## 2. 逐题结果",
+        "",
+        "| # | 问题 | 期望来源 | 命中 | 排名 |",
+        "|---|------|---------|------|------|",
+    ]
+    for index, (question, gold, rank) in enumerate(result["rows"], 1):
+        lines.append(f"| {index} | {question} | {gold} | "
+                     f"{'✅' if rank else '❌'} | {rank or '—'} |")
+
+    lines += ["", "## 3. 失效样本", ""]
+    if result["misses"]:
+        lines += ["| 问题 | 期望 | 实际检索到 | 我的判断 |", "|---|---|---|---|"]
+        for question, gold, got in result["misses"]:
+            lines.append(f"| {question} | {gold} | {', '.join(got[:3])} | (写原因："
+                         "换词？切片太小？语料里根本没有？) |")
+    else:
+        lines.append("本轮无失效样本。**但请把这一节留着**：语料扩到 100 片以上必然出现失效，"
+                     "届时按上面的表记录原因。")
+
+    lines += ["", "## 4. 调参对比", "",
+              "| 切片 token | 重叠 | top-k | 片数 | 命中率 | 平均延迟 ms |",
+              "|---|---|---|---|---|---|"]
+    for row in rows:
+        lines.append(f"| {row['chunk']} | {row['overlap']} | {row['k']} | "
+                     f"{row['chunks_n']} | {row['hit_rate'] * 100:.1f}% | {row['avg_ms']:.1f} |")
+    lines += ["", "## 5. 三行结论（必须自己写，不许留空）", "",
+              "1. 最好的一组是：____，依据是____。",
+              "2. 语料或切片上最大的意外是：____。",
+              "3. 下一轮要改的一件事是：____。"]
+    if spread == 0:
+        lines += ["", "> ⚠ 本轮所有组合得分相同 → 语料过小，本表暂无区分度。"
+                      "扩到 100 片以上再跑一次 `--tune`，用新数字替换本节。"]
+    lines.append("")
+
+    path = Path(args.report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"  wrote {path}")
+    print(f"  top-{args.k} hit rate {result['hit_rate'] * 100:.1f}%, "
+          f"{len(result['misses'])} miss(es), {len(rows)} tuning rows")
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent_cli.py",
+        description="A hand-written database agent: knowledge retrieval, read-only "
+                    "SQL, and a guardrail that neither the model nor the caller can "
+                    "talk its way past.")
+    parser.add_argument("--ingest", metavar="DIR", help="chunk and embed a corpus")
+    parser.add_argument("--ask", action="append", metavar="QUESTION",
+                        help="ask the agent (repeatable)")
+    parser.add_argument("--eval", action="store_true", help="measure retrieval hit rate")
+    parser.add_argument("--tune", action="store_true", help="chunk/overlap/k comparison")
+    parser.add_argument("--report", metavar="PATH",
+                        help="write eval/report.md with the numbers already filled in")
+    parser.add_argument("--eval-file", default=str(DEFAULT_EVAL))
+    parser.add_argument("--corpus", default=str(DEFAULT_CORPUS))
+    parser.add_argument("--store", default=str(DEFAULT_STORE))
+    parser.add_argument("--db", default=None, help="PostgreSQL DSN → pgvector + live SQL")
+    parser.add_argument("--mode", default="auto", choices=["auto", "offline", "api"],
+                        help="embedding backend (auto = api when a key is present)")
+    parser.add_argument("--dim", type=int, default=1024)
+    parser.add_argument("--chunk", type=int, default=512, help="target tokens per chunk")
+    parser.add_argument("--overlap", type=int, default=64)
+    parser.add_argument("--k", type=int, default=5)
+    parser.add_argument("--max-rows", type=int, default=100)
+    parser.add_argument("--whitelist", nargs="*", default=[],
+                        help="tables the guard will allow (default: any)")
+    parser.add_argument("--no-index", action="store_true",
+                        help="create doc_chunks without the HNSW index")
+    parser.add_argument("--llm", default="rules", choices=["rules", "openai"],
+                        help="rules = deterministic router; openai = function calling")
+    parser.add_argument("--trace", default="agent_trace.jsonl")
+    args = parser.parse_args(argv)
+
+    if not any([args.ingest, args.ask, args.eval, args.tune, args.report]):
+        parser.print_help()
+        return 0
+
+    embedder = make_embedder(args)
+    print("schemafence agent — the constraint layer, now with a memory")
+    print(f"embedding : {embedder.label}")
+    print(f"storage   : {'pgvector ' + args.db if args.db else 'json ' + args.store}")
+    print(f"driver    : {'model function calling' if args.llm == 'openai' else 'rules'}")
+
+    if args.ingest:
+        return cmd_ingest(args, embedder)
+    if args.ask:
+        return cmd_ask(args, embedder)
+    if args.eval:
+        return cmd_eval(args, embedder)
+    if args.report:
+        return cmd_report(args, embedder)
+    return cmd_tune(args, embedder)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

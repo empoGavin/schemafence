@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - ./examples/sample_schema.sql:/docker-entrypoint-initdb.d/01-sample_schema.sql:ro
+      - ./scripts/setup_rag.sql:/docker-entrypoint-initdb.d/02-rag.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d fence_demo"]
       interval: 5s

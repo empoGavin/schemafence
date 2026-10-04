@@ -22,15 +22,15 @@ The most common failure is not a syntax error. It's *schema misinterpretation*: 
 
 ## What it checks
 
-| # | Check                          | Catches                                                                      |
-| - | ------------------------------ | ---------------------------------------------------------------------------- |
-| 1 | **Schema resolution**          | Near-duplicate tables and columns the model will confuse (`orders` / `orders_archive`) |
-| 2 | **Join-key sanity**            | Nullable key columns: the join that silently drops rows                      |
-| 3 | **Type & precision mismatch**  | Money in floating point, timestamps held as text, timestamps without a zone  |
-| 4 | **NULL semantics**             | `NOT IN (SELECT …)` over a nullable column — returns empty, no error         |
-| 5 | **Result plausibility**        | Row counts wildly outside expectation (needs a live database)                |
+| # | Check                          | Catches                                                                                                                 |
+| - | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| 1 | **Schema resolution**          | Near-duplicate tables and columns the model will confuse (`orders` / `orders_archive`)                                  |
+| 2 | **Join-key sanity**            | Nullable key columns: the join that silently drops rows                                                                 |
+| 3 | **Type & precision mismatch**  | Money in floating point, timestamps held as text, timestamps without a zone                                             |
+| 4 | **NULL semantics**             | `NOT IN (SELECT …)` over a nullable column — returns empty, no error                                                    |
+| 5 | **Result plausibility**        | Row counts wildly outside expectation (needs a live database)                                                           |
 | 6 | **Runtime guardrails**         | Seven layers: read-only shape, keyword and function deny-lists, table whitelist, forced LIMIT, audit, session hardening |
-| 7 | **Migration diff** *(planned)* | Same query, different behaviour after Oracle → PostgreSQL / domestic DB migration |
+| 7 | **Migration diff** *(planned)* | Same query, different behaviour after Oracle → PostgreSQL / domestic DB migration                                       |
 
 Check 7 is the reason this project exists: **most migration defects are semantic, not syntactic** — and no syntax converter will ever catch them.
 
@@ -90,13 +90,13 @@ pip install -r requirements.txt
 python demo.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo
 ```
 
-`setup_pg.sh` handles both package families: `apt` (Debian/Ubuntu) and `dnf`
+`setup_pg.sh` handles both package families: `apt` (Debian/Ubuntu) and `dnf`  
 (RHEL, Oracle Linux, Rocky, AlmaLinux). Step-by-step guides:
 
-| Platform | Guide |
-| -------- | ----- |
-| Local **Oracle Linux 10** VM on VMware | [`docs/quickstart-oraclelinux-vm.md`](docs/quickstart-oraclelinux-vm.md) |
-| **Cloud Studio** free tier (Ubuntu container) | [`docs/quickstart-cloudstudio.md`](docs/quickstart-cloudstudio.md) |
+| Platform                                      | Guide                                                                    |
+| --------------------------------------------- | ------------------------------------------------------------------------ |
+| Local **Oracle Linux 10** VM on VMware        | [`docs/quickstart-oraclelinux-vm.md`](docs/quickstart-oraclelinux-vm.md) |
+| **Cloud Studio** free tier (Ubuntu container) | [`docs/quickstart-cloudstudio.md`](docs/quickstart-cloudstudio.md)       |
 
 Using it as a library:
 
@@ -113,49 +113,123 @@ print(verdict.ok, verdict.layer, verdict.reason)
 # False L1 multiple statements in one call are not allowed
 ```
 
+## The agent — retrieval, tools, and the same fence
+
+`demo.py` audits a schema. `agent_cli.py` is the agent that *uses* one: it answers a
+question by choosing between a knowledge base and the live catalogue, and every SQL
+statement it produces still goes through `guard()`.
+
+```bash
+python agent_cli.py --ingest examples/knowledge     # chunk → embed → store
+python agent_cli.py --ask "PG 里表膨胀怎么治理？"
+python agent_cli.py --eval                          # top-k retrieval hit rate
+python agent_cli.py --tune                          # chunk × overlap × top-k
+python agent_cli.py --report eval/report.md         # writes the numbers down
+```
+
+One run, offline — no database, no API key, no network:
+
+```
+[ask] PG 里表膨胀怎么治理？
+  · the question is about the state of the data, not about practice
+  · the question is about practice — check what we already know
+
+  !! 1. get_table_stats()
+      → not run: no database attached — start PostgreSQL and pass --db  [0 ms]
+  ok 2. search_docs(query=PG 里表膨胀怎么治理？, k=5)
+      → 5 passage(s)  [2 ms]
+
+  driver: rules / no model   rounds: 1   5 ms
+
+  (get_table_stats: not run: no database attached — start PostgreSQL and pass --db)
+  From the knowledge base:
+    · pg-bloat · 表膨胀（table bloat）的成因与治理 (score 0.073) — 表膨胀（table bloat）的成因与治理。 一句话结论。 膨胀不是"数据变多了"，而是"空间回收不掉了"…
+  — assembled without a language model: the evidence above is the tool output, verbatim.
+```
+
+Note step 1: with no database attached the tool does **not** silently return
+something plausible — it says so, the step is marked `!!`, and the answer stays
+limited to what the knowledge base can actually support. A missing tool is
+reported, never papered over.
+
+And a question that must be refused, not answered:
+
+```
+[ask] 帮我删掉 orders 这张表
+  · the question asks for a write — this agent may only read
+  I cannot do that.  I only read: no INSERT, UPDATE, DELETE or DDL leaves this
+  process.  If you need the data changed, that has to go through a change request
+  against a write-capable role.
+```
+
+Two backends, one loop — swap either half independently:
+
+| | offline (default) | live |
+| --- | --- | --- |
+| embedding | deterministic hashed lexical vector + corpus IDF | any OpenAI-compatible endpoint (`SF_EMBED_API_KEY`) |
+| store | JSON file under `.schemafence/` | pgvector + HNSW (`--db`, [`scripts/setup_rag.sql`](scripts/setup_rag.sql)) |
+| driver | rule-based router (the honest baseline) | function calling (`--llm openai`, `SF_LLM_API_KEY`) |
+
+The four tools: `search_docs`, `run_sql`, `explain_sql`, `get_table_stats`. All four
+are dispatched through one door — `guard()` — and every call is appended to
+`agent_trace.jsonl` with its decision, the layer it was decided at, and how long it
+took. **The loop is hand-written on purpose:** when an interviewer asks how the agent
+chooses a tool and what happens when one fails, the answer has to come from code you
+wrote.
+
 ## How it works
 
 ```
-            ┌────────────┐      ┌─────────────────────────┐      ┌──────────┐
- question ─▶│ LLM / NL2SQL│─────▶│      schemafence        │─────▶│ Database │
-            └────────────┘      │  schema check            │      │ (read-   │
-                  ▲             │  join & type sanity      │      │  only)   │
-                  │             │  NULL semantics          │      └──────────┘
-            schema snapshot    │  plausibility bounds     │
-            (pgvector store)   │  guardrails + audit log  │
-                               └─────────────────────────┘
+            ┌──────────────┐      ┌─────────────────────────┐      ┌──────────┐
+ question ─▶│ agent loop   │─────▶│      schemafence        │─────▶│ Database │
+            │ (rules / LLM │      │  schema check            │      │ (read-   │
+            │  tool calls) │      │  join & type sanity      │      │  only)   │
+            └──────┬───────┘      │  NULL semantics          │      └──────────┘
+                   │              │  plausibility bounds     │
+       search_docs │              │  guardrails + audit log  │
+                   ▼              └─────────────────────────┘
+          ┌──────────────────┐
+          │ knowledge layer  │  JSON (offline) or pgvector (live)
+          │ chunk→embed→store│  notes, runbooks, incident write-ups
+          └──────────────────┘
 ```
 
 ## Status
 
-**Early — day 3 of a 7-day build.**
+**Early — day 4 of a 7-day build.**
 
 - [x] Project skeleton
 - [x] Offline audit: checks 1–4 plus hygiene, straight from a DDL file
 - [x] Seven-layer guardrail with a 13-case selftest
 - [x] Live mode: reads the catalogue and `pg_stats` (measured NULL fractions)
 - [x] Setup script for both `apt` and `dnf` families, plus two quickstarts ([Oracle Linux VM](docs/quickstart-oraclelinux-vm.md) · [Cloud Studio](docs/quickstart-cloudstudio.md))
-- [ ] Schema snapshot in pgvector, real embeddings — *day 4*
-- [ ] Tool-calling agent over a real model — *day 5*
-- [ ] Guardrails wired into the execution path — *day 6*
+- [x] Knowledge layer: chunk (heading-aware) → embed → store → retrieve, JSON or pgvector — *day 4*
+- [x] Four tools + hand-written agent loop, rules offline and function calling with a key — *day 5*
+- [x] Retrieval eval harness, tuning grid and a generated `eval/report.md` — *day 4*
 - [ ] Migration diff (Oracle → PostgreSQL / domestic DB) — *30-day plan*
 
 ## Known limitations
 
 A read-only fence is only useful if you know where it is thin.
 
-- **The DDL reader is hand-written** and assumes one column definition per line.
-  Fine for the bundled example; production should parse with `sqlglot` or
-  `pg_query`. It is deliberately dependency-free, so `python demo.py` works on a
+- **The DDL reader is hand-written** and assumes one column definition per line.  
+  Fine for the bundled example; production should parse with `sqlglot` or  
+  `pg_query`. It is deliberately dependency-free, so `python demo.py` works on a  
   fresh clone with no install.
-- **No embeddings yet.** The pgvector store lands on day 4; today the snapshot is
-  read straight from the catalogue.
+- **The offline embedding is lexical, not semantic.** It is the baseline you can
+  measure the real thing against, and it is why `--eval` always prints the corpus
+  size next to the hit rate: 100% over 16 pieces is a smoke test, not a result.
+  Switch to an API embedding with `SF_EMBED_API_KEY` and re-run `--eval`.
+- **The bundled corpus is 8 notes / ~2,600 characters.** Large enough to exercise
+  chunking, IDF and the eval harness; far too small to separate tuning settings
+  (`--tune` says so itself when every configuration ties). Your own notes are the
+  point.
 - **Check 5 is not in the report yet.** Row estimates are printed, but nothing
   compares them against an expectation.
-- **The planner is keyword-based on purpose.** It stands in for a model so the
-  demo needs no API key. Nothing about the fence changes when a real model is
+- **The planner is keyword-based on purpose.** It stands in for a model so the  
+  demo needs no API key. Nothing about the fence changes when a real model is  
   plugged in — that is the point.
-- **PostgreSQL only** for now (catalogue queries and `pg_stats`). Oracle is where
+- **PostgreSQL only** for now (catalogue queries and `pg_stats`). Oracle is where  
   the migration-diff work starts.
 
 ## Why I built this

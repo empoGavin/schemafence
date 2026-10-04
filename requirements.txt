@@ -1,11 +1,16 @@
-# Offline demo (python demo.py) needs nothing but Python 3.10+.
-# The single dependency below is for live mode (--db).
+# The offline path — `python demo.py` and `python agent_cli.py --ingest/--ask/--eval`
+# — needs nothing but Python 3.10+.  That is deliberate: the fence is
+# deterministic, so a fresh clone runs before you install anything.
+#
+# Live mode (--db) needs exactly one third-party package:
 
 psycopg[binary]>=3.1
-python-dotenv>=1.0
 
-# Day 4-5, uncomment when you add embeddings and a real model.
-# Any OpenAI-compatible endpoint works: DeepSeek, Qwen, GLM, OpenAI.
+# There is no SDK for embeddings or chat completion.  Both are plain HTTPS
+# calls made with urllib, so switching providers is an environment variable,
+# not a dependency:
 #
-# openai>=1.40
-# tiktoken>=0.7
+#   SF_EMBED_API_KEY / SF_EMBED_BASE_URL / SF_EMBED_MODEL / (--dim)
+#   SF_LLM_API_KEY   / SF_LLM_BASE_URL   / SF_LLM_MODEL
+#
+# Anything OpenAI-compatible works: DeepSeek, Qwen (Bailian), GLM, OpenAI.
