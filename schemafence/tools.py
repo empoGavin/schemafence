@@ -20,6 +20,7 @@ question "how do you know it behaved?".
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -111,8 +112,8 @@ SELECT n.nspname                                   AS schema_name,
   LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
  WHERE c.relkind = 'r'
    AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-   AND (%(schema)s IS NULL OR n.nspname = %(schema)s)
-   AND (%(table)s  IS NULL OR c.relname  = %(table)s)
+   AND (%(schema)s::text IS NULL OR n.nspname = %(schema)s::text)
+   AND (%(table)s::text  IS NULL OR c.relname  = %(table)s::text)
  ORDER BY pg_total_relation_size(c.oid) DESC
  LIMIT 20
 """
@@ -164,13 +165,23 @@ class ToolResult:
 class Toolbox:
     def __init__(self, store=None, conn=None, whitelist=None,
                  trace_path: str | Path = "agent_trace.jsonl",
-                 max_rows: int = 100, timeout_ms: int = 10_000):
+                 max_rows: int = 100, timeout_ms: int = 10_000,
+                 search_path: str | None = None):
         self.store = store
         self.conn = conn
         self.whitelist = whitelist
         self.trace_path = Path(trace_path)
         self.max_rows = max_rows
         self.timeout_ms = timeout_ms
+        # An unqualified table name only resolves if the session search_path
+        # covers its schema.  The demo schema lives in `shop`, the default
+        # search_path does not, so an LLM writing `FROM orders` fails with
+        # UndefinedTable no matter how correct the rest of the query is.
+        # The operator passes --search-path shop; anything else is the caller's
+        # own DSN option, not this layer's business.
+        if search_path and not re.fullmatch(r"[A-Za-z0-9_,\$ ]+", search_path):
+            raise ValueError(f"--search-path looks wrong: {search_path!r}")
+        self.search_path = search_path
         self.audit: list[dict] = []
 
     # -- audit -------------------------------------------------------------- #
@@ -309,6 +320,8 @@ class Toolbox:
         string checker were bypassed, the session still cannot write.
         """
         with self.conn.cursor() as cur:
+            if self.search_path:
+                cur.execute(f"SET search_path TO {self.search_path}")
             for statement in session_sql:
                 cur.execute(statement)
             cur.execute(sql, params)

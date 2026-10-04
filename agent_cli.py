@@ -246,7 +246,8 @@ def cmd_ask(args, embedder: Embedder) -> int:
 
     conn = attach_database(args, store)
     toolbox = Toolbox(store=store, conn=conn, whitelist=args.whitelist or None,
-                      trace_path=args.trace, max_rows=args.max_rows)
+                      trace_path=args.trace, max_rows=args.max_rows,
+                      search_path=args.search_path)
     schema = load_schema(args)
     llm = LLMClient() if args.llm != "rules" else None
     if llm is not None:
@@ -637,6 +638,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-rows", type=int, default=100)
     parser.add_argument("--whitelist", nargs="*", default=[],
                         help="tables the guard will allow (default: any)")
+    parser.add_argument("--search-path", default=None, metavar="SCHEMA",
+                        help="SET search_path before every query (e.g. shop) "
+                             "so unqualified table names resolve")
     parser.add_argument("--no-index", action="store_true",
                         help="create doc_chunks without the HNSW index")
     parser.add_argument("--llm", default="rules", choices=["rules", "openai"],

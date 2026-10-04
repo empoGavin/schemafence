@@ -252,10 +252,31 @@ def _tool_message(call_id: str, payload: dict) -> dict:
     return {"role": "tool", "tool_call_id": call_id, "content": text}
 
 
+def _schema_catalogue(schema) -> str:
+    """One line per table, qualified names only.
+
+    The model cannot guess which schema the tables live in — it wrote
+    `FROM orders` and then tried `schema=public`, and both failed because
+    the demo schema is `shop`.  A catalogue costs a few hundred tokens and
+    removes an entire failure class; the qualified-name instruction matters
+    because search_path may not cover the schema either.
+    """
+    if schema is None or not getattr(schema, "tables", None):
+        return ""
+    lines = []
+    for t in schema.tables:
+        cols = ", ".join(c.name for c in t.columns)
+        note = f"  -- {t.comment}" if t.comment else ""
+        lines.append(f"  - {t.qualified} ({cols}){note}")
+    return ("\n\nSchema catalogue — use these EXACT qualified names; unqualified\n"
+            "table names fail because search_path does not include the schema:\n"
+            + "\n".join(lines) + "\n")
+
+
 def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
-             max_rounds: int) -> AgentRun:
+             max_rounds: int, schema=None) -> AgentRun:
     run = AgentRun(question=question, driver=f"model / {llm.model}")
-    messages = [{"role": "system", "content": AGENT_SYSTEM},
+    messages = [{"role": "system", "content": AGENT_SYSTEM + _schema_catalogue(schema)},
                 {"role": "user", "content": question}]
 
     for round_no in range(1, max_rounds + 1):
@@ -370,7 +391,7 @@ def run_agent(question: str, toolbox: Toolbox, schema=None,
               llm: LLMClient | None = None, max_rounds: int = MAX_ROUNDS) -> AgentRun:
     started = time.perf_counter()
     if llm is not None and llm.available:
-        run = _run_llm(question, toolbox, llm, max_rounds)
+        run = _run_llm(question, toolbox, llm, max_rounds, schema=schema)
     else:
         run = _run_offline(question, toolbox, schema)
     run.ms = round((time.perf_counter() - started) * 1000, 2)
