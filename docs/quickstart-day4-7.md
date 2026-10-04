@@ -175,11 +175,45 @@ python agent_cli.py --ask "subtransaction 太多会怎样？"
 | 存储 | JSON 文件（离线）/ pgvector + HNSW（live） | 为什么两种？离线这条让"克隆下来就能跑"成立 |
 | 检索 | 余弦距离 Top-K（离线暴力算，live 用 HNSW 索引） | 暴力算和 HNSW 的差别在哪、怎么测 |
 
+> **⚠️ 别把 "live" 理解成"要联网/要 API key"。** 这里有**三条互相独立的轴**，各自单独选，任意组合都合法：
+>
+> | 轴 | 靠什么切换 | 不切会怎样 |
+> |---|---|---|
+> | **嵌入** | `SF_EMBED_API_KEY`（或 `--mode api`） | 不下载模型、不装库，向量在本机算出来（哈希词袋 + IDF） |
+> | **存储** | `--db` → pgvector；否则 JSON 文件 | 就存在磁盘上的 json，照样能跑 |
+> | **对话驱动** | `--llm openai` + `SF_LLM_API_KEY` | 继续用确定性规则路由，照样能答 |
+>
+> 本项目里的 **live = 挂上了真实数据库**（`--db`），它跟 API key 没有任何关系。
+> **零 key 也能跑 live**，这是完全受支持且常用的配置：
+>
+> ```bash
+> $ python agent_cli.py --ask "复制延迟看哪个指标？" --db postgresql://…/fence_demo
+> embedding : offline / hashed-lexical + corpus idf / 1024d
+> storage   : pgvector postgresql://…/fence_demo
+> driver    : rules
+> ```
+>
+> 注意三行：存储已经是 pgvector，但嵌入仍是**离线哈希**（向量在 pgvector 里，但不是在云上算的），
+> 驱动仍是**规则路由**。API key 买到的只是"换一种嵌入方式"，从来不是"跑起来的前提"。
+> （唯一的例外是 `--db` 需要 `psycopg` 这个包，所以活库那条要在 venv 里跑——这是**依赖**问题，不是 key 问题。）
+
+
+
 > **一句必须记住的自我评价**：离线嵌入是**词面匹配**，不是语义匹配。它命中"共享词汇"的问题，漏掉"换个说法"的问题。它的价值是当**基线**——有了基线，换成真 embedding 之后的提升数字才站得住。
 
 ### 2.2 你自己的素材怎么写（今天最花时间、最值钱的一步）
 
 计划里说要 ≥20 个文档、≥3 万字。**别一次写 3 万字**，今天先写 8–10 篇能撑住 16 道题的，剩下的后面补。
+
+**`--ingest` 只认 `.md` 和 `.txt`**（子目录递归扫描）。这是刻意的：核心零第三方依赖，"克隆即跑"才成立。你手里已有的 Word/PDF 笔记**不用重写**，一条命令转过来：
+
+```bash
+# .docx / .html / .odt → .md（pandoc）；.pdf → .txt（pdftotext）
+# 幂等：转过的自动跳过
+bash scripts/convert_notes.sh ~/旧笔记目录 data/docs
+```
+
+> **转完必须人工过一遍标题**。转换保住的是文字，不是结构——Word 的一级标题转过来常常是加粗段落，而切片器靠 `#` 标题导航，加粗段落对它是隐形的。10 分钟修标题，比之后调任何参数都划算。PDF 转出来的 txt 没有标题，检索效果天然弱一档，重要的内容建议还是落成 md。
 
 **命名规范**（决定 `eval/questions.md` 的"期望来源"怎么写）：
 
@@ -235,6 +269,24 @@ mkdir -p data/docs && cp ~/你的笔记/*.md data/docs/
 python agent_cli.py --ingest data/docs
 python agent_cli.py --eval --eval-file eval/questions.md
 ```
+
+**如果笔记带不出来（保密约束），用合成语料包顶上。** 仓库里已经有现成的一份：
+`examples/knowledge-dba/`（12 篇，公开 PostgreSQL 知识 + 虚构场景承载真实踩过的坑），
+配套 `eval/questions-dba.md`（38 题）和 `eval/report-dba.md`（命中率报告）。
+直接跑：
+
+```bash
+python agent_cli.py --ingest examples/knowledge-dba --corpus examples/knowledge-dba \
+                    --store .schemafence/dba.json
+python agent_cli.py --report eval/report-dba.md --corpus examples/knowledge-dba \
+                    --store .schemafence/dba.json --eval-file eval/questions-dba.md
+```
+
+判断标准只有一条：**这段话能不能当着面试官的面讲出来？** 不能的就不进语料。
+写法见 [`docs/synthetic-corpus.md`](synthetic-corpus.md)：三类素材风险分级、
+"脱环境"改写示例（把「参数从 64 调到 256 才不卡」写成「先看 wait_event、再定位阻塞源」）、
+以及发布前的合规自查清单。**合规在这里是加分项不是障碍**——企业内部 RAG 的第一大障碍就是
+数据合规，主动说明你怎么处理的，比拿一堆内部文档做 demo 强得多。
 
 **题库怎么来——先把心态摆正**：评测题库是**量尺**，不是**门槛**。它不需要覆盖你未来会问的一切，它只需要**稳定**——下次改切片、换嵌入、加语料之后，同一套题重跑，看命中率是涨是跌。这正是回归测试的思路：你不需要预知未来，你只需要锁住"现在能查到的、以后不许丢"。
 

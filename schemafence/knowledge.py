@@ -230,7 +230,7 @@ def chunk_markdown(text: str, source: str, target_tokens: int = 512,
                    overlap_tokens: int = 64) -> list[Chunk]:
     """Split one document into overlapping chunks that remember where they came from.
 
-    Two rules, and the second one is the one people forget:
+    Three rules, and the last two are the ones people forget:
 
       1. a heading is a *soft* boundary — a section shorter than half a chunk
          is merged forward into the next one, so a chunk is never a fragment
@@ -239,7 +239,15 @@ def chunk_markdown(text: str, source: str, target_tokens: int = 512,
          hand-written note the heading is where the most discriminative words
          live ("判断治理是否真的有效"), and dropping it means a question phrased
          the way the author titled the section retrieves nothing — which is
-         exactly what the first eval run showed.
+         exactly what the first eval run showed;
+      3. the label is captured when the chunk *starts*, not when it is flushed,
+         and overlap never crosses a heading.  The first version set the label
+         only on the empty-buffer path, so every chunk after the first came out
+         as "(untitled)" and the evidence lost the one field that tells the
+         reader which section it came from.
+
+    Front matter before the first heading (a disclaimer, a licence) is dropped:
+    it is header plumbing, not evidence, and embedding it only adds noise.
     """
     stack: list[tuple[int, str]] = []
     buffer: list[str] = []
@@ -250,15 +258,15 @@ def chunk_markdown(text: str, source: str, target_tokens: int = 512,
     def section_path() -> str:
         return " / ".join(t for _, t in stack) if stack else "(untitled)"
 
-    def flush() -> None:
-        nonlocal buffer, label
+    def flush(keep_overlap: bool = True) -> None:
+        nonlocal buffer
         if not buffer:
             return
         content = " ".join(buffer).strip()
         if content:
             chunks.append(Chunk(source=source, section=label, content=content,
                                 token_count=estimate_tokens(content)))
-        if len(buffer) > 1 and overlap_tokens > 0:
+        if keep_overlap and len(buffer) > 1 and overlap_tokens > 0:
             keep: list[str] = []
             acc = 0
             for sentence in reversed(buffer[:-1]):
@@ -273,15 +281,18 @@ def chunk_markdown(text: str, source: str, target_tokens: int = 512,
     for line in text.splitlines():
         heading = HEADING.match(line)
         if heading:
-            if buffer and estimate_tokens(" ".join(buffer)) >= soft_min:
-                flush()
+            title = heading.group(2).strip()
             level = len(heading.group(1))
+            if not stack:
+                buffer = []                     # drop front matter, see docstring
+            elif buffer and estimate_tokens(" ".join(buffer)) >= soft_min:
+                flush(keep_overlap=False)       # a heading is a hard boundary for overlap
             while stack and stack[-1][0] >= level:
                 stack.pop()
-            stack.append((level, heading.group(2).strip()))
+            stack.append((level, title))
             if not buffer:
                 label = section_path()
-            buffer.append(f"{heading.group(2).strip()}。")   # keep the title searchable
+            buffer.append(f"{title}。")         # keep the title searchable
             continue
         if not line.strip():
             continue

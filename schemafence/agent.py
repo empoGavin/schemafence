@@ -56,6 +56,42 @@ current state of the data.
 
 DESTRUCTIVE = ("删掉", "删除", "清空", "清除", "改一下", "改掉", "drop", "delete",
                "truncate", "update ", "insert", "写入", "导入数据", "建表", "授权")
+# A write keyword alone is not intent.  What separates "帮我删掉这张表" from
+# "删除大表分区要注意什么" is the shape of the sentence, so the router reads
+# both: an act request ("帮我"/"直接跑") means do it, a question form ("？"
+# "怎么"/"是不是") means explain it.
+ACT_REQUEST = ("帮我", "给我", "请帮", "麻烦帮", "麻烦你", "来删", "来改", "来建",
+               "执行一下", "跑一下", "直接执行", "直接跑", "帮我做", "你来")
+INTERROGATIVE = ("?", "？", "吗", "呢", "怎么", "如何", "为什么", "是否", "能不能",
+                 "可不可以", "要不要", "需要注意", "注意什么", "区别", "一样",
+                 "哪个", "哪里", "是什么", "什么意思")
+
+# (question, expected to be refused) — the router is the one place where a
+# keyword list is doing judgement, so it gets a selftest like the guard has.
+ROUTE_CASES: tuple[tuple[str, bool], ...] = (
+    ("帮我删掉 orders 表 2024 年之前的数据", True),
+    ("帮我删掉 orders 表的数据，可以吗？", True),
+    ("drop table orders", True),
+    ("清空 t 表", True),
+    ("delete from shop.orders where id = 1", True),
+    ("把参数从配置文件里删掉和设成 0，效果一样吗？", False),
+    ("怎么安全地删除大表的历史分区？", False),
+    ("truncate 大表会锁多久？", False),
+    ("授权给只读账号要注意什么？", False),
+    ("怎么建表更合理？", False),
+)
+
+
+def run_route_selftest() -> tuple[list[tuple[str, bool, bool]], bool]:
+    """Return (rows, all_passed) where each row is (question, expected, passed)."""
+    rows = []
+    all_passed = True
+    for question, expected in ROUTE_CASES:
+        refused = bool(route(question)[0]) and route(question)[0][0][0] == "__refuse__"
+        passed = refused is expected
+        all_passed = all_passed and passed
+        rows.append((question, expected, passed))
+    return rows, all_passed
 VAGUE = ("我不确定", "不知道查什么", "不知道", "随便", "帮我看看", "看看有什么问题",
          "你看着办", "有啥问题")
 
@@ -110,13 +146,38 @@ def _short(args: dict, limit: int = 52) -> str:
 # --------------------------------------------------------------------------- #
 
 def route(question: str, schema=None) -> tuple[list[tuple[str, dict]], list[str]]:
-    """Question -> [(tool, args)].  Every branch states its reason out loud."""
+    """Question -> [(tool, args)].  Every branch states its reason out loud.
+
+    Note how the write check is split in two.  A keyword hit does *not* prove
+    the intent is a write: "把参数从配置文件里删掉和设成 0 效果一样吗" is a
+    practice question that happens to contain 删掉, and refusing it makes the
+    assistant useless for a whole class of legitimate DBA questions.
+
+    So the keyword is combined with the *shape of the sentence*: an imperative
+    ("帮我删掉…", "drop table orders") is a request to act, a question ("怎么
+    安全地删除…？") is a request to explain.  Only the first is refused here;
+    the second is answered from the knowledge base with no statement executed.
+
+    The reason for being generous on the question side: the two mistakes are
+    not symmetric.  Letting a write request reach the tools costs one refusal
+    with no side effect — the guard is what actually stops a statement.  Killing
+    a real question costs the user his answer, and no later gate can restore it.
+    """
     low = question.lower()
     reasons: list[str] = []
 
-    if any(word in low for word in DESTRUCTIVE):
+    named_write = [word for word in DESTRUCTIVE if word in low]
+    begging = any(word in low for word in ACT_REQUEST)
+    asking = any(word in low for word in INTERROGATIVE)
+
+    if named_write and (begging or not asking):
         return [("__refuse__", {})], [
             "the question asks for a write — this agent may only read"]
+    if named_write:
+        return [("search_docs", {"query": question, "k": 5})], [
+            f"the question mentions a write ({named_write[0]}) but is phrased as a "
+            "question — answered from the knowledge base only, and no statement "
+            "will be executed"]
     if any(word in question for word in VAGUE):
         return [("__clarify__", {})], [
             "the question does not name a table, a time range or a symptom — "

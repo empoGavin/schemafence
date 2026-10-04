@@ -17,6 +17,7 @@ one backend at a time — the loop, the tools and the guard never change.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -77,6 +78,41 @@ def idf_sidecar(args) -> Path:
     return Path(args.store).parent / "idf.json"
 
 
+def store_has_idf(args) -> bool:
+    """Does the store already carry corpus weights?  Peek, do not load.
+
+    The header is printed before anything is opened, so the answer has to come
+    from a cheap inspection of the artefact itself rather than from the live
+    object.
+    """
+    if args.db:
+        return idf_sidecar(args).exists()
+    path = Path(args.store)
+    if not path.exists():
+        return False
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")).get("idf"))
+    except (OSError, ValueError):
+        return False
+
+
+def embedding_line(args, embedder: Embedder) -> str:
+    """The header must not under-report the method actually in use.
+
+    `Embedder.label` cannot know about IDF yet — the weights live in the store
+    or in the sidecar and are only attached when the store is opened.  Ingest
+    builds them from the corpus it is about to read, and a query reuses
+    whatever the store carries, so both cases have weights even though the
+    in-memory dict is still empty at print time.
+    """
+    if embedder.mode == "api":
+        return embedder.label
+    weights = bool(embedder.idf) or bool(getattr(args, "ingest", None)) \
+        or store_has_idf(args)
+    suffix = " + corpus idf" if weights else " / no idf"
+    return f"offline / hashed-lexical{suffix} / {embedder.dim}d"
+
+
 def open_store(args, embedder: Embedder, create: bool = False):
     """Open whichever backend the flags ask for, and make sure the query
     side uses the same feature weights the ingest side used."""
@@ -85,7 +121,15 @@ def open_store(args, embedder: Embedder, create: bool = False):
         if create:
             store.ensure_schema(with_index=not args.no_index)
         if embedder.mode == "offline" and not embedder.idf:
+            # In pgvector mode the weights live in a sidecar next to --store, not
+            # in the table.  If it went missing the query vector would silently
+            # differ from the one that was stored, and the rankings would drift
+            # with no error anywhere — so say it out loud instead.
             embedder.idf = load_idf(idf_sidecar(args))
+            if not embedder.idf and not create:
+                print(f"  note: no corpus weights at {idf_sidecar(args)} — "
+                      f"running without IDF, so ranking will differ from the "
+                      f"ingest run.  Re-ingest if this is unexpected.")
         return store
 
     store = JsonStore.load(args.store, dim=args.dim)
@@ -549,7 +593,7 @@ def main(argv=None) -> int:
 
     embedder = make_embedder(args)
     print("schemafence agent — the constraint layer, now with a memory")
-    print(f"embedding : {embedder.label}")
+    print(f"embedding : {embedding_line(args, embedder)}")
     print(f"storage   : {'pgvector ' + args.db if args.db else 'json ' + args.store}")
     print(f"driver    : {'model function calling' if args.llm == 'openai' else 'rules'}")
 

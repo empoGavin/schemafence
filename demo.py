@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from schemafence import analyze, parse_ddl, summarize            # noqa: E402
+from schemafence.agent import run_route_selftest                 # noqa: E402
 from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.planner import plan                             # noqa: E402
 
@@ -95,6 +96,20 @@ def show_guard_selftest() -> bool:
         verdict = "allow" if expected else "block"
         print(f"  {mark} expect {verdict:<5}  {sql}")
     print()
+    print(f"  {len(rows)} cases → {'all passed' if passed_all else 'FAILURES present'}")
+    return passed_all
+
+
+def show_route_selftest() -> bool:
+    heading("[router] write intent vs practice question")
+    rows, passed_all = run_route_selftest()
+    for question, expected, passed in rows:
+        mark = "ok  " if passed else "FAIL"
+        verdict = "refuse" if expected else "answer"
+        print(f"  {mark} expect {verdict:<6}  {question}")
+    print()
+    print("  a write keyword is not intent: the imperative is refused, the")
+    print("  question is answered from the knowledge base with nothing executed.")
     print(f"  {len(rows)} cases → {'all passed' if passed_all else 'FAILURES present'}")
     return passed_all
 
@@ -178,6 +193,7 @@ def main(argv=None) -> int:
     print("  a wrong number.  None of them raises an error.")
 
     guard_ok = show_guard_selftest()
+    route_ok = show_route_selftest()
 
     if args.ask:
         show_plan(args.ask, schema)
@@ -197,6 +213,8 @@ def main(argv=None) -> int:
         if any(order[f.severity] <= limit for f in findings):
             return 1
     if not guard_ok:
+        return 1
+    if not route_ok:
         return 1
     return 0
 

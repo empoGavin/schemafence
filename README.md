@@ -62,6 +62,8 @@ mode   : offline (no database, no model, no API key)
   16 finding(s): 5 high / 9 medium / 2 low
 [guard] seven-layer selftest
   13 cases → all passed
+[router] write intent vs practice question
+  10 cases → all passed
 ```
 
 See the whole pipeline — question, table choice, generated SQL, verdict:
@@ -128,6 +130,18 @@ python agent_cli.py --tune                          # chunk × overlap × top-k
 python agent_cli.py --report eval/report.md         # writes the numbers down
 ```
 
+Two corpora ship with the repo, and both are meant to be swapped for your own:
+
+| Corpus                   | What it is                                                              | Questions                 |
+| ------------------------ | ----------------------------------------------------------------------- | ------------------------- |
+| `examples/knowledge/`    | 8 de-identified runbooks (the original pack)                            | `eval/questions.md` (16)  |
+| `examples/knowledge-dba/`| 12 synthetic notes — public PostgreSQL knowledge, fictional scenarios    | `eval/questions-dba.md` (38) |
+
+If your own notes are not allowed to leave the company, read
+[`docs/synthetic-corpus.md`](docs/synthetic-corpus.md) first: it says what is safe to write
+down, how to de-identify an incident, and carries a pre-publish checklist. Corporate RAG
+usually fails on corpus compliance before it fails on retrieval.
+
 One run, offline — no database, no API key, no network:
 
 ```
@@ -163,13 +177,44 @@ And a question that must be refused, not answered:
   against a write-capable role.
 ```
 
-Two backends, one loop — swap either half independently:
+A keyword is not intent, though — `删除` appears in the refused question above
+*and* in "怎么安全地删除大表的历史分区？", which is a practice question. The
+router therefore reads the **shape** of the sentence, not just the vocabulary: an
+imperative (`帮我删掉…`, `drop table orders`) is a request to act and is refused;
+a question (`…要注意什么？`) is a request to explain and is answered from the
+knowledge base with nothing executed.
 
-| | offline (default) | live |
-| --- | --- | --- |
-| embedding | deterministic hashed lexical vector + corpus IDF | any OpenAI-compatible endpoint (`SF_EMBED_API_KEY`) |
-| store | JSON file under `.schemafence/` | pgvector + HNSW (`--db`, [`scripts/setup_rag.sql`](scripts/setup_rag.sql)) |
-| driver | rule-based router (the honest baseline) | function calling (`--llm openai`, `SF_LLM_API_KEY`) |
+The two mistakes are not symmetric. Letting a write request reach the tools costs
+one refusal with no side effect — `guard()` is what actually stops a statement.
+Killing a real question costs the user his answer, and no later gate can restore
+it. So the router is deliberately generous, and the determinism lives in the one
+place that can enforce it. Both behaviours are pinned by a selftest so that
+widening the keyword list cannot quietly turn the assistant mute.
+
+Three independent axes, not one "offline vs live" switch — each is chosen
+separately, and every combination works:
+
+| axis | default | switched by | what it costs if you skip it |
+| --- | --- | --- | --- |
+| embedding | deterministic hashed lexical vector + corpus IDF | `SF_EMBED_API_KEY` (`--mode api`) | nothing is downloaded, no SDK: the vector is computed locally |
+| store | JSON file under `.schemafence/` | `--db` → pgvector + HNSW ([`scripts/setup_rag.sql`](scripts/setup_rag.sql)) | stays a file on disk, still works |
+| driver | rule-based router (the honest baseline) | `--llm openai` + `SF_LLM_API_KEY` | stays deterministic, still answers |
+
+So "live" in this repository means **a real database is attached** (`--db`) — it
+says nothing about API keys. `--db` with no key at all is a supported and
+useful configuration: pgvector stores the vectors, and the vectors themselves
+still come from the offline hashed embedding. Run it with no network and no
+account:
+
+```
+$ python agent_cli.py --ask "复制延迟看哪个指标？" --db postgresql://…/fence_demo
+embedding : offline / hashed-lexical + corpus idf / 1024d
+storage   : pgvector postgresql://…/fence_demo
+driver    : rules
+```
+
+The only thing an API key buys you is a *different* embedding (and, for the
+driver, a different router). It is never a prerequisite for the agent to run.
 
 The four tools: `search_docs`, `run_sql`, `explain_sql`, `get_table_stats`. All four
 are dispatched through one door — `guard()` — and every call is appended to
@@ -201,7 +246,7 @@ wrote.
 
 - [x] Project skeleton
 - [x] Offline audit: checks 1–4 plus hygiene, straight from a DDL file
-- [x] Seven-layer guardrail with a 13-case selftest
+- [x] Seven-layer guardrail with a 13-case selftest, plus a router selftest
 - [x] Live mode: reads the catalogue and `pg_stats` (measured NULL fractions)
 - [x] Setup script for both `apt` and `dnf` families, plus two quickstarts ([Oracle Linux VM](docs/quickstart-oraclelinux-vm.md) · [Cloud Studio](docs/quickstart-cloudstudio.md))
 - [x] Knowledge layer: chunk (heading-aware) → embed → store → retrieve, JSON or pgvector — *day 4*
