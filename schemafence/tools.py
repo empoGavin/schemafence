@@ -254,7 +254,11 @@ class Toolbox:
             probe = body
         else:
             probe = f"EXPLAIN (COSTS ON, VERBOSE OFF)\n{body}"
-        verdict = guard(probe, max_rows=self.max_rows, whitelist=None,
+        # table_whitelist stays None on purpose: EXPLAIN returns a plan, not
+        # rows, and without ANALYZE it executes nothing — L5 is not the layer
+        # that matters here.  (A plain whitelist= typo here once made every
+        # plan question die with a TypeError before the guard even ran.)
+        verdict = guard(probe, max_rows=self.max_rows, table_whitelist=None,
                         timeout_ms=self.timeout_ms)
         if not verdict.ok:
             return {"ok": False, "blocked": True, "layer": verdict.layer,
