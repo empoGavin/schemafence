@@ -326,6 +326,7 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
                                  final.get("content") or "", flags=re.S).strip()
                           or _offline_answer(run))
             return run
+        executed_any = False
         for call in calls:
             name = call["function"]["name"]
             try:
@@ -342,6 +343,7 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
                             "evidence you already have.",
                 }))
                 continue
+            executed_any = True
             result = toolbox.call(name, args)
             run.steps.append(Step(name, args, result.data, result.ok,
                                   result.ms, result.brief()))
@@ -352,6 +354,17 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
                 "error": result.data.get("error") or result.data.get("reason"),
                 "hint": "fix the query and try once more, or explain why you cannot"}
             messages.append(_tool_message(call.get("id", name), payload))
+
+        # Every call this round was a blocked repeat — the model is looping on
+        # a deterministic failure and the hint did not move it.  Take the
+        # tools away so its only move is a plain-text answer; if it still
+        # returns nothing, assemble the evidence mechanically.
+        if calls and not executed_any:
+            final = llm.chat(messages)
+            run.answer = (re.sub(r"<think>.*?</think>", "",
+                                 final.get("content") or "", flags=re.S).strip()
+                          or _offline_answer(run))
+            return run
 
     run.answer = ("I stopped after the tool-call budget ran out.  Here is what I "
                   "found before stopping:\n" + _offline_answer(run))
