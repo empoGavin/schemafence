@@ -350,7 +350,17 @@ class Toolbox:
         """
         with self.conn.cursor() as cur:
             if self.search_path:
-                cur.execute(f"SET search_path TO {self.search_path}")
+                # The knowledge store shares this connection, and doc_chunks
+                # lives in public.  `SET search_path TO shop` alone erased
+                # public from name resolution, so every search_docs died with
+                # UndefinedTable right after a successful get_table_stats —
+                # while psql, with its default search_path, saw the table fine.
+                # --search-path asks for a schema to be *findable*, not for
+                # public to disappear.
+                parts = re.split(r"[\s,]+", self.search_path.strip())
+                if "public" not in parts:
+                    parts.append("public")
+                cur.execute(f"SET search_path TO {', '.join(parts)}")
             for statement in session_sql:
                 cur.execute(statement)
             cur.execute(sql, params)
