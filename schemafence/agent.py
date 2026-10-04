@@ -285,7 +285,22 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
         messages.append(message)
         calls = message.get("tool_calls") or []
         if not calls:
-            run.answer = (message.get("content") or "").strip()
+            content = re.sub(r"<think>.*?</think>", "",
+                             message.get("content") or "", flags=re.S).strip()
+            if content:
+                run.answer = content
+                return run
+            # Qwen3-class thinking models sometimes return an empty content
+            # with everything parked in reasoning_content.  Nudge once, with
+            # tools withheld, so the only possible move is a plain-text
+            # summary of the evidence already gathered.
+            messages.append({"role": "user", "content":
+                "Your last reply was empty. Answer the original question now, "
+                "in plain text, citing the tool results you already have."})
+            final = llm.chat(messages)
+            run.answer = (re.sub(r"<think>.*?</think>", "",
+                                 final.get("content") or "", flags=re.S).strip()
+                          or _offline_answer(run))
             return run
         for call in calls:
             name = call["function"]["name"]

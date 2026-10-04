@@ -89,8 +89,13 @@ TOOL_SPECS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "schema": {"type": "string", "description": "default: public"},
-                    "table": {"type": "string", "description": "omit for all tables"},
+                    "schema": {"type": "string",
+                               "description": "schema name, e.g. shop; omit to "
+                                              "search all user schemas"},
+                    "table": {"type": "string",
+                              "description": "bare table name, or a "
+                                             "schema-qualified name like "
+                                             "shop.orders (both accepted)"},
                 },
                 "required": [],
             },
@@ -281,6 +286,11 @@ class Toolbox:
         return {"ok": True, "plan": [r[0] for r in rows]}
 
     def get_table_stats(self, schema: str | None = None, table: str | None = None) -> dict:
+        # A model reads the catalogue, sees shop.orders, and passes the whole
+        # qualified name in `table` — accept it instead of returning zero rows
+        # because relname is only the bare part.
+        if table and "." in table and not schema:
+            schema, _, table = table.partition(".")
         params = {"schema": schema or None, "table": table or None}
         verdict = guard(TABLE_STATS_SQL, max_rows=20, timeout_ms=self.timeout_ms)
         if not verdict.ok:
