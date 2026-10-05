@@ -1,30 +1,33 @@
 # schemafence
 
-> **Two halves: an agent that diagnoses a database from a DBA knowledge base, and a fence that stops it doing damage.**
+> An agent that answers database questions from a DBA knowledge base, and a fence
+> that every statement passes before it reaches the database.
 >
-> `schemafence` 由两半组成——**一个懂数据库的助手**（DBA 知识库 + 活库证据，回答"这张表为什么慢"），
-> 和**一圈护栏**（每一条要落到库上的语句，先过七道闸门再执行）。
+> 一个懂数据库的助手（知识库 + 活库证据，回答"这张表为什么慢"），
+> 外加一圈护栏（每一条要落到库上的语句，先过七道闸门再执行）。
 
 ---
 
 ## Two halves, and one rule about how they meet
 
-Most database AI tools ship one of the two and pretend it covers the other. They answer
-diagnostic questions *and* hold a write-capable connection, with nothing in between.
+The knowledge side and the constraint side are deliberately separate. Most database AI
+tools ship one of them and let it stand in for the other: a diagnostic answer and a
+write-capable connection end up in the same process with nothing in between.
 
 |                    | **The agent** (knowledge side)                                   | **The fence** (constraint side)                          |
 | ------------------ | ---------------------------------------------------------------- | -------------------------------------------------------- |
 | Answers            | "orders 表为什么这么慢？" · "idle in transaction 有什么后果？"      | "这条语句允许执行吗？"                                     |
-| How it decides     | retrieval + tool evidence + (optionally) a model                  | fixed rules — no model, no retrieval                      |
-| Nature             | **probabilistic** — a bad answer is bad advice                    | **deterministic** — a bad decision is silent data damage   |
-| Can it be tuned?   | yes: corpus, chunk/overlap/top-k, relevance floor, embedder, model | no. that is the point                                     |
+| How it decides     | retrieval, tool evidence, optionally a model                      | fixed rules, no model and no retrieval                    |
+| Nature             | probabilistic: a wrong answer is bad advice                       | deterministic: a wrong decision damages data silently     |
+| Tuning it          | corpus, chunk/overlap/top-k, relevance floor, embedder, model     | not possible, by design                                   |
 | Its evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 6 tool cases   |
 | Where it lives     | `schemafence/agent.py`, `schemafence/knowledge.py`                | `schemafence/guard.py`                                    |
 
-They meet in exactly **one** place: `Toolbox` in `schemafence/tools.py`. Retrieved passages
-travel into the answer text and stop there — **nothing from the knowledge base ever enters
-the execution path**, and the only thing that decides whether SQL runs is `guard()`.
-That separation is why a mediocre retrieval score is a quality problem, not a safety problem.
+They meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go
+into the answer text and no further. Nothing from the knowledge base reaches the
+execution path, and `guard()` is the only thing that decides whether a statement
+runs. That is why a mediocre retrieval score is a quality problem and not a safety
+one.
 
 ```
    question ──▶ agent loop ──▶ Toolbox ──▶ guard() ──▶ database (read-only)
@@ -38,18 +41,22 @@ That separation is why a mediocre retrieval score is a quality problem, not a sa
 ```bash
 git clone https://github.com/empoGavin/schemafence
 cd schemafence
-python demo.py          # no database, no model, no API key — about 30 seconds
+python demo.py          # no database, no model, no API key, about 30 seconds
 ```
 
 ```
 schemafence — the DBA agent, and the fence in front of the database
 ====================================================================
+source : sample_schema.sql
+tables : 7      columns : 33
+mode   : offline (no database, no model, no API key)
+
 [check 1] schema resolution — which entity gets picked   (1)
 [check 2] join-key sanity — rows silently dropped   (4)
 [check 3] type & precision — values silently changed   (6)
 [check 4] NULL semantics — three-valued logic traps   (1)
 [check H] hygiene — comments and naming   (4)
-
+                                        # finding detail trimmed; see --verbose
 [summary]
   16 finding(s): 5 high / 9 medium / 2 low
 [guard] seven-layer selftest
@@ -63,19 +70,25 @@ schemafence — the DBA agent, and the fence in front of the database
   ok   explain_sql / no database          ok=False, says so
   ok   get_table_stats / no database      ok=False, says so
   ok   get_table_stats / bad args         decision=bad-arguments
+
+  these cases exist because of a bug the other tests missed: the
+  relevance floor asked whether an embedder was attached, and the CLI
+  attaches one even offline, so an API-grade floor of 0.45 filtered
+  out every lexical hit (their scores run 0.089-0.285).
   6 cases → all passed
 ```
 
-The `[tools]` block is a smoke test that exists because a real bug got past the
-others: the relevance floor asked *"is an embedder attached?"* while `open_store`
-attaches one on every path — so offline answers were filtered with an API-grade
-floor of 0.45 against lexical scores of 0.089–0.285, and the agent told the user
-"the note may not exist yet" about notes it had just ingested. **Presence of an
-embedder is not the same as a semantic one**, and the test that missed it
-constructed the store the way the product does not.
+The `[tools]` block was added after a bug the other tests could not see. The relevance
+floor asked whether an embedder was attached, and `open_store` attaches one on every
+path, offline included. Offline answers were therefore filtered with the API floor of
+0.45 against lexical scores of 0.089–0.285: every passage was dropped, and the agent
+told the user "the note may not exist yet" about notes it had just ingested. The unit
+test that missed this built a store with `embedder=None`, which is not how the CLI
+wires it.
 
-The agent half runs offline too — no database, no API key, no network. Here it is
-answering the demo scenario's question with nothing but a corpus and a rule-based router:
+The agent half runs offline too, with no database, no API key and no network. Here it
+is answering the demo scenario's question with nothing but a corpus and a rule-based
+router:
 
 ```bash
 python agent_cli.py --ingest examples/knowledge-dba   # chunk → embed → store
@@ -88,21 +101,33 @@ python agent_cli.py --eval                            # top-k retrieval hit rate
   · no signal in the question — fall back to the knowledge base
 
   ok 1. search_docs(query=订单表查询走了顺序扫描，是不是该加个索引？, k=5)
-      → 5 passage(s)  [4 ms]
+      → 5 passage(s)  [3 ms]
 
-  driver: rules / no model   rounds: 1   7 ms
+  driver: rules / no model   rounds: 1   6 ms
 
   From the knowledge base:
     · pg-bloat-seq-scan · 表膨胀导致的顺序扫描误诊：看着像缺索引，其实是死元组 (score 0.170) —
-      虚构场景：订单表 `orders` 查询突然变慢，`EXPLAIN` 显示 `Seq Scan`，开发的第一反应是"加个 status 索引"…
-    · pg-index-not-used · 索引建了却不走：六种常见原因与验证手段 / 原因六：参数化查询走了通用计划 (score 0.138)
-    · pg-slow-query-method · 慢查询定位：从现象到 SQL 原文 / 一个合成案例：月末报表拖垮库 (score 0.134)
+      表膨胀导致的顺序扫描误诊：看着像缺索引，其实是死元组。 一次典型的误诊路径。
+      虚构场景：订单表 `orders` 查询突然变慢，`EXPLAIN` 显示 `Seq Scan`，
+      开发的第一反应是"加个 status 索引"。 但翻 `pg_stat_user_tables` 发现：
+      - 表 300 MB，`n_live
+    · pg-index-not-used · 索引建了却不走：六种常见原因与验证手段 / 原因六：参数化查询走了通用计划 (score 0.138) —
+      原因六：参数化查询走了通用计划。 同一个 SQL 用不同参数反复执行时，
+      PG 可能从自定义计划切到通用计划，而通用计划对某些参数值恰好很糟…
+    · pg-slow-query-method · 慢查询定位：从现象到 SQL 原文 / 一个合成案例：月末报表拖垮库 (score 0.134) —
+      一个合成案例：月末报表拖垮库。 某零售订单系统（虚构）在月末出现整体响应变慢…
 ```
+
+The CLI prints up to 200 characters per passage; entries above end where I cut
+them for width, not where the corpus does. Note the shape of the top hit: the
+chunk text carries its own heading (`表膨胀导致的顺序扫描误诊…` repeated), because
+headings are inlined into the chunk at ingest time — without that, a question
+phrased like a heading would not match the chunk that the heading belongs to.
 
 ## Half one — the agent
 
-`demo.py` audits a schema. `agent_cli.py` is the agent that *uses* one: it answers a
-question by choosing between a knowledge base and the live catalogue, and every SQL
+`demo.py` audits a schema. `agent_cli.py` is the agent that uses one: it answers a
+question by choosing between the knowledge base and the live catalogue, and every SQL
 statement it produces still goes through `guard()`.
 
 ```bash
@@ -114,29 +139,30 @@ python agent_cli.py --genq                            # draft eval questions fro
 python agent_cli.py --tune                            # chunk × overlap × top-k
 ```
 
-And when part of the environment is missing, the tool says so rather than answering anyway:
+When part of the environment is missing, the tool says so instead of answering anyway:
 
 ```
 [ask] PG 里表膨胀怎么治理？                       # no --db, no key, no network
-  · the question is about the state of the data, not about practice
+  · the question is about the state of the data
   · the question is about practice — check what we already know
 
   !! 1. get_table_stats()
       → not run: no database attached — start PostgreSQL and pass --db  [0 ms]
   ok 2. search_docs(query=PG 里表膨胀怎么治理？, k=5)
-      → 5 passage(s)  [2 ms]
+      → 5 passage(s)  [3 ms]
 
-  driver: rules / no model   rounds: 1   5 ms
+  driver: rules / no model   rounds: 1   8 ms
 
   (get_table_stats: not run: no database attached — start PostgreSQL and pass --db)
+  From the knowledge base: …                       # passage list trimmed here
 ```
 
-Note step 1: the tool does **not** silently return something plausible. It says what
-it cannot reach, the step is marked `!!`, and the answer stays limited to what the
-knowledge base can actually support. A missing tool is reported, never papered over.
+Step 1 is the rule in miniature. With nothing to query, the tool does not return
+something plausible; it reports what it cannot reach, the step is marked `!!`, and the
+answer stays inside what the corpus can support.
 
-With a database and a model attached, the shape is the same and the stakes are higher —
-three calls, three jobs: *how* it ran, *why*, and *what to do about it*.
+With a database and a model attached, the same three steps happen in a different order:
+read the plan, read the table's stats, search the corpus.
 
 ```
   ok 1. explain_sql(sql=EXPLAIN ANALYZE SELECT * FROM shop.orders;)
@@ -149,68 +175,67 @@ three calls, three jobs: *how* it ran, *why*, and *what to do about it*.
   driver: model / Qwen/Qwen3-8B   rounds: 3
 ```
 
-The third call is the one worth watching. In the first live run the model answered a bloat
-question correctly **without ever searching the corpus** — the reasoning frame came from
-the system prompt, the numbers from `get_table_stats`, and the fixes from its own
-parametric knowledge. Correct, but generic: it never mentioned that `VACUUM FULL` takes an
-`ACCESS EXCLUSIVE` lock. Reusing a model's prior over a runbook is how an agent looks
-smart while being useless, so searching the knowledge base is now a required step, and the
-answer has to cite the passage or say plainly that none matched.
+The third call is the one that changed the design. In the first live run the model
+answered the bloat question correctly without searching the corpus at all. The reasoning
+frame came from the system prompt, the numbers from `get_table_stats`, and the fixes
+from its own training data. The answer was right but generic, and it never mentioned
+that `VACUUM FULL` takes an `ACCESS EXCLUSIVE` lock. Searching the knowledge base is now
+a required step, and the answer has to cite the passage it used or say plainly that none
+matched.
 
 ### The four tools
 
-`search_docs`, `run_sql`, `explain_sql`, `get_table_stats`. All four are dispatched
-through one door — `guard()` — and every call is appended to `agent_trace.jsonl` with
-its decision, the layer it was decided at, and how long it took. **The loop is
-hand-written on purpose:** when an interviewer asks how the agent chooses a tool and
-what happens when one fails, the answer has to come from code you wrote.
+`search_docs`, `run_sql`, `explain_sql`, `get_table_stats`. All four go through one door,
+`guard()`, and every call is appended to `agent_trace.jsonl` with its decision, the layer
+it was decided at, and its duration. The loop is hand-written rather than delegated to a
+framework, so that tool selection and failure handling stay explainable line by line.
 
-Two of the failure modes it has to survive are worth naming, because both were found by
-running it, not by reasoning about it:
+Two failures were found by running this against a live database, not by reading the code.
 
-- **A tool that fails identically forever.** A missing `doc_chunks` table made
-  `search_docs` raise the same error four rounds in a row — each repeat paying for an
-  embedding request — until the tool budget was gone. Calls are now memoised by
-  (tool, arguments): a failed repeat is refused with "this exact call already failed,
-  change approach", a *successful* repeat gets the cached payload back plus "you already
-  have this, use it". A round made entirely of repeats trips a breaker that withholds the
-  tools and forces a plain-text answer.
-- **A model endpoint that goes quiet.** `Qwen3-8B` is a thinking model; with a ~2k-token
-  system prompt the first call can exceed the read timeout. An unhandled `TimeoutError`
-  used to kill the process and take the collected evidence with it. There is now
-  retry-with-backoff (4xx is *not* retried — a 401 should not cost three attempts to
-  report a bad key), a 300 s default timeout, and a degradation path that ends the run
-  with the evidence assembled by hand, prefixed by what actually happened.
+The first was a tool that failed identically every time. A missing `doc_chunks` table made
+`search_docs` raise the same error four rounds in a row, each repeat paying for an
+embedding request, until the tool budget was gone. Calls are now memoised by
+(tool, arguments): a failed repeat is refused with a note that the identical call already
+failed, and a successful repeat gets its cached payload back with a note to move on. A
+round made entirely of repeats trips a breaker that withholds the tools and forces a
+plain-text answer.
+
+The second was a model endpoint that went quiet. `Qwen3-8B` is a thinking model, and with
+a ~2k-token system prompt its first call can exceed the read timeout. An unhandled
+`TimeoutError` used to kill the process and take the collected evidence with it. There is
+now retry with backoff (4xx is not retried — a 401 should not cost three attempts to
+report a bad key), a 300 s default timeout, and a degradation path that ends the run with
+the evidence assembled by hand and a line saying what happened.
 
 ### A keyword is not intent
 
-`删除` appears both in `帮我删掉 orders 这张表` (must be refused) and in
-`怎么安全地删除大表的历史分区？` (a practice question, must be answered). The router
-reads the **shape** of the sentence, not just the vocabulary: an imperative is a request
-to act and is refused, a question is a request to explain and is answered from the
-knowledge base with nothing executed.
+`删除` appears both in `帮我删掉 orders 这张表`, which has to be refused, and in
+`怎么安全地删除大表的历史分区？`, which has to be answered. The router reads the shape of
+the sentence as well as the vocabulary: an imperative is a request to act and is refused;
+a question is a request to explain and is answered from the knowledge base with nothing
+executed.
 
-The two mistakes are not symmetric. Letting a write request reach the tools costs one
-refusal with no side effect — `guard()` is what actually stops a statement. Killing a
-real question costs the user his answer, and no later gate can restore it. So the router
-is deliberately generous, and the determinism lives in the one place that can enforce it.
-Both behaviours are pinned by a selftest so that widening the keyword list cannot quietly
-turn the assistant mute.
+The two mistakes cost different things, so they are not weighed the same. A write request
+that reaches the tools is stopped by `guard()` with no side effect. A real question that
+gets refused is simply lost, and no later gate brings it back. The router therefore errs
+toward answering, and the determinism stays in the layer that can enforce it. Both
+behaviours are pinned by a selftest, so widening the keyword list cannot quietly make the
+assistant mute.
 
 ### Three independent axes
 
-Not one "offline vs live" switch — each is chosen separately, and every combination works:
+Three separate choices, not one "offline vs live" switch. Every combination works:
 
-| axis | default | switched by | what it costs if you skip it |
+| axis | default | switched by | if you leave it out |
 | --- | --- | --- | --- |
-| embedding | deterministic hashed lexical vector + corpus IDF | `SF_EMBED_API_KEY` (`--mode api`) | nothing is downloaded, no SDK: the vector is computed locally |
+| embedding | deterministic hashed lexical vector + corpus IDF | `SF_EMBED_API_KEY` (`--mode api`) | nothing is downloaded and no SDK is needed: the vector is computed locally |
 | store | JSON file under `.schemafence/` | `--db` → pgvector + HNSW ([`scripts/setup_rag.sql`](scripts/setup_rag.sql)) | stays a file on disk, still works |
 | driver | rule-based router (the honest baseline) | `--llm openai` + `SF_LLM_API_KEY` | stays deterministic, still answers |
 
-So "live" in this repository means **a real database is attached** (`--db`) — it says
-nothing about API keys. `--db` with no key at all is a supported and useful
-configuration: pgvector stores the vectors, and the vectors themselves still come from
-the offline hashed embedding. Run it with no network and no account:
+"Live" in this repository means a real database is attached (`--db`). It says nothing
+about API keys. `--db` with no key at all is a supported and useful configuration:
+pgvector stores the vectors, and the vectors themselves still come from the offline
+hashed embedding. Run it with no network and no account:
 
 ```
 $ python agent_cli.py --ask "复制延迟看哪个指标？" --db postgresql://…/fence_demo
@@ -219,12 +244,12 @@ storage   : pgvector postgresql://…/fence_demo
 driver    : rules
 ```
 
-The only thing an API key buys you is a *different* embedding (and, for the driver, a
-different router). It is never a prerequisite for the agent to run.
+An API key changes which embedding is used and which router drives the loop. It is not a
+prerequisite for anything here to run.
 
 ### The corpus, and why retrieval quality is measurable
 
-Two corpora ship with the repo, and both are meant to be swapped for your own:
+Two corpora ship with the repo, and both are meant to be replaced with your own:
 
 | Corpus                    | What it is                                                             | Notes   | Questions                      |
 | ------------------------- | ---------------------------------------------------------------------- | ------- | ------------------------------ |
@@ -232,72 +257,71 @@ Two corpora ship with the repo, and both are meant to be swapped for your own:
 | `examples/knowledge-dba/` | synthetic notes — public PostgreSQL knowledge, fictional scenarios      | 14 / 40 chunks | `eval/questions-dba.md` (44) |
 
 If your own notes are not allowed to leave the company, read
-[`docs/synthetic-corpus.md`](docs/synthetic-corpus.md) first: it says what is safe to write
-down, how to de-identify an incident, and carries a pre-publish checklist. Corporate RAG
-usually fails on corpus compliance before it fails on retrieval.
+[`docs/synthetic-corpus.md`](docs/synthetic-corpus.md) first. It covers what is safe to
+write down, how to de-identify an incident, and it ends with a checklist to run before
+publishing. In most corporate RAG projects the corpus rules fail before the retrieval
+does.
 
-`--eval` is the ruler, not a gate: 44 questions over 40 chunks, currently **97.7% at top-5**
-(43/44) with the offline lexical embedder. The one remaining miss is a *word-form* failure,
-not a chunking failure: the note says `50% 用量`, the question says `一半` — exactly where a
-hashed lexical vector fails and a semantic one should not (see the report).
+`--eval` is a measuring stick, not a pass/fail gate. 44 questions over 40 chunks come out
+at **97.7% top-5** (43/44) with the offline lexical embedder. The single miss is a
+word-form problem rather than a chunking problem: the note says `50% 用量` and the
+question says `一半`. That is exactly where a hashed lexical vector fails and a semantic
+one should not (see the report).
 
-Growing the corpus also exposed a **label-ambiguity** problem, which is the more
-transferable lesson: the new `pg-bloat-seq-scan` note answers question 9 as well as
+Growing the corpus then exposed a labelling problem, which turned out to be the more
+useful lesson. The new `pg-bloat-seq-scan` note answers question 9 as well as
 `pg-vacuum-tuning` does, so a single-label harness scored a true hit as a miss and the
-headline number dropped for a reason that had nothing to do with retrieval. Questions now
-accept alternatives (`甲 / 乙`). **The first thing a growing corpus breaks is usually the
-labels, not the retrieval.**
+headline number fell for a reason that had nothing to do with retrieval. Questions now
+accept a set of sources (`甲 / 乙`). Adding notes tends to break the labels before it
+breaks the retrieval.
 
-Two discipline notes the CLI prints for you rather than leaving to the reader:
+Two things the CLI prints so that you do not have to remember them:
 
-- the hit rate is always printed next to the corpus size (100% over 16 chunks is a smoke
-  test, not a result);
+- the hit rate always appears next to the corpus size (100% over 16 chunks proves nothing);
 - `--eval` prints each question's **top-1 score** and names the floor to use — the lowest
   top-1 score among the questions that hit, minus a margin. That is how the relevance
   floor below was calibrated instead of guessed.
 
 ### What keeps irrelevant citations out
 
-When a question has no counterpart in the corpus, top-k still returns k passages, and a
-model told to cite something will cite the nearest neighbours — a real `idle in
-transaction` question produced an answer full of subtransaction overflow and inode
-exhaustion, both retrieved, both irrelevant. Four levers, cheapest first:
+When the corpus has no answer, top-k still returns k passages, and a model that was told
+to cite something will cite the nearest neighbours. A real question about
+`idle in transaction` came back full of subtransaction overflow and inode exhaustion: both
+retrieved, neither relevant. Four things keep that out, cheapest first:
 
-1. **A relevance floor in `search_docs`** — passages below it are dropped and reported
-   (`dropped_below_floor`, `top_score`). Default 0.45 with API embeddings, 0 with the
-   offline hash embedder, whose scores run an order of magnitude lower (0.089–0.285 on
+1. **A relevance floor in `search_docs`.** Passages below it are dropped and reported
+   (`dropped_below_floor`, `top_score`). The default is 0.45 with API embeddings and 0 with
+   the offline hash embedder, whose scores run an order of magnitude lower (0.089–0.285 on
    this corpus) and would lose real hits to any absolute threshold. `--min-score` /
    `SF_DOC_MIN_SCORE`.
-2. **Citation discipline in the system prompt** — a note about subtransactions does not
+2. **Citation discipline in the system prompt.** A note about subtransactions does not
    answer a question about idle transactions, and "no matching note exists" is a complete
-   answer. Wrapping a near miss in a citation is *worse* than admitting the gap, because
-   the citation makes it look verified.
-3. **Calibration from the eval run** (above) rather than a hand-picked constant.
-4. **Filling the gap** — `pg-idle-in-transaction.md` exists because the corpus, not the
+   answer. Wrapping a near miss in a citation is worse than admitting the gap, because the
+   citation makes it look verified.
+3. **Calibration from the eval run**, above, rather than a constant picked by hand.
+4. **Filling the gap.** `pg-idle-in-transaction.md` exists because the corpus, not the
    model, was the actual problem.
 
-Not built yet, and worth knowing as the next tier: reranking, hybrid BM25 + vector
-retrieval (exact terms like `idle in transaction` are where keywords beat embeddings), and
-post-hoc citation auditing — a deterministic check that every cited source really came
-from this retrieval round, which is the same idea as `guard()` applied to prose.
+Not built yet, and the next tier: reranking, hybrid BM25 + vector retrieval (exact terms
+like `idle in transaction` are where keywords beat embeddings), and post-hoc citation
+auditing — a deterministic check that every cited source really came from this retrieval
+round, which is `guard()` applied to prose.
 
 ## Half two — the fence
 
 ### Why it exists
 
-The industry spent two years learning an uncomfortable lesson about NL2SQL: **the hard part
-is not the language model — it's the database.**
+NL2SQL has had a few years now, and the hard part turned out to be the database rather
+than the language model.
 
-The most common failure is not a syntax error. It's *schema misinterpretation*: the LLM
-picks the wrong table, joins on a lossy key, misreads a NULL-able column, or confuses two
-similarly-named fields. The query **executes successfully** and returns a number that looks
-perfectly reasonable.
+The most common failure is not a syntax error but a misread schema: the model picks the
+wrong table, joins on a lossy key, misreads a nullable column, or confuses two similarly
+named fields. The query runs, and it returns a number that looks entirely reasonable.
+Nothing raises an error; the report is simply wrong.
 
-**Nobody gets an error. The report is just wrong.**
-
-`schemafence` puts a fence between the model and your data. Before a generated query
-touches the database, it is checked against what the schema actually means — not just
-whether it parses.
+`schemafence` sits between the model and the data. Before a generated query reaches the
+database it is checked against what the schema actually means, not only against whether it
+parses.
 
 > SQL 不会报错，报表只是"错了"——没有人会收到任何告警。`schemafence` 就是为这种失败形态而建。
 
@@ -313,28 +337,30 @@ whether it parses.
 | 6 | **Runtime guardrails**         | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 | 7 | **Migration diff** *(planned)* | Same query, different behaviour after Oracle → PostgreSQL / domestic DB migration                                       |
 
-Check 7 is the reason this project exists: **most migration defects are semantic, not
-syntactic** — and no syntax converter will ever catch them.
+Check 7 is the reason the project exists. Most migration defects are semantic rather than
+syntactic, and no syntax converter will catch them.
 
 Checks 1–4 and the guardrails (6) run today, with or without a database. Check 5 needs a
 live connection and is partly wired up. Check 7 is the 30-day goal.
 
-See the whole pipeline — question, table choice, generated SQL, verdict:
+The whole pipeline, from question to verdict:
 
 ```bash
 python demo.py --ask "total order amount for the last week?"
+#   question : total order amount for the last week?
 #   #1  shop.orders                score 6
 #   #2  shop.orders_archive        score 6
-#   note : 2 candidate tables scored close together — the model picks one,
-#          and nothing in the database stops it picking the wrong one
-#   guard: ALLOWED
+#   #3  shop.refunds               score 4
+#   note : 3 candidate tables scored close together — the model picks one, and
+#          nothing in the database stops it picking the wrong one
+#   guard: ALLOWED (rewritten)   →  LIMIT 100 added, session hardened
 ```
 
 A question with one obvious answer behaves the other way:
 
 ```bash
 python demo.py --ask "哪个表存了退款信息？"
-#   #1  shop.refunds               score 12      ← no ambiguity, nothing to catch
+#   #1  shop.refunds               score 12      ← one clear candidate, nothing to catch
 ```
 
 With a live database (optional — pick your platform):
@@ -368,11 +394,14 @@ print(verdict.ok, verdict.layer, verdict.reason)
 # False L1 multiple statements in one call are not allowed
 ```
 
-And a question that must be refused, not answered — the fence's answer, in prose:
+A question the agent has to refuse rather than answer:
 
 ```
 [ask] 帮我删掉 orders 这张表
   · the question asks for a write — this agent may only read
+
+  driver: rules / no model   rounds: 1   0 ms
+
   I cannot do that.  I only read: no INSERT, UPDATE, DELETE or DDL leaves this
   process.  If you need the data changed, that has to go through a change request
   against a write-capable role.
@@ -415,20 +444,21 @@ And a question that must be refused, not answered — the fence's answer, in pro
 
 ## Known limitations
 
-A read-only fence is only useful if you know where it is thin.
+It helps to know where the fence is thin.
 
 - **The DDL reader is hand-written** and assumes one column definition per line.
   Fine for the bundled example; production should parse with `sqlglot` or
   `pg_query`. It is deliberately dependency-free, so `python demo.py` works on a
   fresh clone with no install.
-- **The offline embedding is lexical, not semantic.** It is the baseline you can
-  measure the real thing against, and it is why `--eval` always prints the corpus
-  size next to the hit rate: 97.7% over 40 chunks is a smoke test, not a result.
-  Switch to an API embedding with `SF_EMBED_API_KEY` and re-run `--eval`.
-- **The retrieval scores are not comparable across embedders.** API-model similarities
-  live around 0.5–0.7; the offline hash embedder scores 0.089–0.285 on the same corpus.
-  That is why the relevance floor defaults to 0 offline and is calibrated from `--eval`
-  before being used with a real embedding.
+- **The offline embedding is a lexical bag of words, not a semantic one.** It is the
+  baseline the real thing gets measured against, and it is why `--eval` always prints
+  the corpus size next to the hit rate: 97.7% over 40 chunks proves the plumbing works,
+  not that retrieval is good. Switch to an API embedding with `SF_EMBED_API_KEY` and
+  re-run `--eval`.
+- **Retrieval scores are not comparable across embedders.** API-model similarities live
+  around 0.5–0.7; the offline hash embedder scores 0.089–0.285 on the same corpus. That is
+  why the relevance floor defaults to 0 offline and is calibrated from `--eval` before
+  being used with a real embedding.
 - **The eval harness is a ruler under revision.** Each question now accepts a set of
   sources (`甲 / 乙`), but it is still one rank against that set: a third note could
   legitimately answer the same question and the number would not know. Read the hit rate
@@ -436,25 +466,24 @@ A read-only fence is only useful if you know where it is thin.
 - **Corpora are searched one directory at a time.** IDF is computed over the corpus that
   was ingested, so mixing the two bundled packs in a single store changes the weights and
   measurably moves the hit rate (97.4% → 94.7% in an earlier run). Ingest one corpus.
-- **Check 5 is not in the report yet.** Row estimates are printed, but nothing
-  compares them against an expectation.
-- **The planner is keyword-based on purpose.** It stands in for a model so the
-  demo needs no API key. Nothing about the fence changes when a real model is
-  plugged in — that is the point.
-- **PostgreSQL only** for now (catalogue queries and `pg_stats`). Oracle is where
-  the migration-diff work starts.
+- **Check 5 is not in the report yet.** Row estimates are printed, but nothing compares
+  them against an expectation.
+- **The planner is keyword-based on purpose.** It stands in for a model so the demo needs
+  no API key. Nothing about the fence changes when a real model is plugged in.
+- **PostgreSQL only** for now (catalogue queries and `pg_stats`). Oracle is where the
+  migration-diff work starts.
 
 ## Why I built this
 
 I spent 21 years as an Oracle DBA (OCM), leading zero-downtime Oracle-to-distributed-DB
-migrations across 20 regions. Every migration failure I've seen was *silent first*: the SQL
-ran, the numbers looked plausible, and the damage showed up weeks later.
+migrations across 20 regions. Every migration failure I have seen was silent first: the SQL
+ran, the numbers looked plausible, and the damage surfaced weeks later.
 
-AI-generated SQL fails the same way, and so does AI-generated diagnosis: an answer that
+AI-generated SQL fails the same way, and so does AI-generated diagnosis. An answer that
 reads well and cites nothing is the same failure mode as a query that returns a number
-nobody questions. This project is that experience, turned into code — one half that gives
-the model a memory of how these problems were actually solved, and one half that assumes
-it will eventually be wrong anyway.
+nobody checks. This project is that experience turned into code: one half that remembers
+how these problems were solved before, and one half that assumes the model will be wrong
+eventually.
 
 > 我做了 21 年 Oracle DBA（OCM），主导过 3 个产品、覆盖 20 个 Region 的零停机去 O 迁移。
 > 见过的迁移事故几乎都是"先静默、后爆炸"。AI 生成的 SQL 正在用同样的方式失败——这个项目就是把那段经验写成代码。

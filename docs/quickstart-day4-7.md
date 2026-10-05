@@ -271,8 +271,8 @@ python agent_cli.py --eval --eval-file eval/questions.md
 ```
 
 **如果笔记带不出来（保密约束），用合成语料包顶上。** 仓库里已经有现成的一份：
-`examples/knowledge-dba/`（12 篇，公开 PostgreSQL 知识 + 虚构场景承载真实踩过的坑），
-配套 `eval/questions-dba.md`（38 题）和 `eval/report-dba.md`（命中率报告）。
+`examples/knowledge-dba/`（14 篇，公开 PostgreSQL 知识 + 虚构场景承载真实踩过的坑），
+配套 `eval/questions-dba.md`（44 题）和 `eval/report-dba.md`（命中率报告）。
 直接跑：
 
 ```bash

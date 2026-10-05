@@ -220,11 +220,11 @@ def route(question: str, schema=None) -> tuple[list[tuple[str, dict]], list[str]
 
     if any(word in low for word in STATS_WORDS):
         calls.append(("get_table_stats", {}))
-        reasons.append("the question is about the state of the data, not about practice")
+        reasons.append("the question is about the state of the data")
     if any(word in low for word in PLAN_WORDS):
         if planned_sql:
             calls.append(("explain_sql", {"sql": planned_sql}))
-            reasons.append("the question is about speed — read the plan, do not guess")
+            reasons.append("the question is about speed, so read the plan first")
     if any(word in low for word in QUERY_WORDS):
         if planned_sql:
             calls.append(("run_sql", {"sql": planned_sql}))

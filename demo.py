@@ -122,10 +122,10 @@ def show_tool_selftest() -> bool:
         mark = "ok  " if passed else "FAIL"
         print(f"  {mark} {name:<34} {expected}")
     print()
-    print("  the tools report what they cannot do instead of guessing, and the")
-    print("  offline store still retrieves: presence of an embedder is not the")
-    print("  same as a semantic one, and an API-grade relevance floor applied")
-    print("  to lexical scores drops every passage there is.")
+    print("  these cases exist because of a bug the other tests missed: the")
+    print("  relevance floor asked whether an embedder was attached, and the CLI")
+    print("  attaches one even offline, so an API-grade floor of 0.45 filtered")
+    print("  out every lexical hit (their scores run 0.089-0.285).")
     print(f"  {len(rows)} cases → {'all passed' if passed_all else 'FAILURES present'}")
     return passed_all
 
@@ -205,8 +205,8 @@ def main(argv=None) -> int:
     heading("[summary]")
     print(f"  {counts['total']} finding(s): {counts['high']} high / "
           f"{counts['medium']} medium / {counts['low']} low")
-    print("  every one of them produces a query that runs successfully and returns")
-    print("  a wrong number.  None of them raises an error.")
+    print("  every one of them produces a query that runs without error and")
+    print("  returns a wrong number.")
 
     guard_ok = show_guard_selftest()
     route_ok = show_route_selftest()
