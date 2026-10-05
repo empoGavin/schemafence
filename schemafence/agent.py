@@ -25,7 +25,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -234,16 +236,32 @@ def route(question: str, schema=None) -> tuple[list[tuple[str, dict]], list[str]
 # model-driven loop (OpenAI-compatible, still zero dependencies)
 # --------------------------------------------------------------------------- #
 
+class LLMUnavailable(RuntimeError):
+    """The chat endpoint could not be reached, or gave up after retries.
+
+    Raised instead of letting a socket error escape: an unhandled
+    TimeoutError kills the whole process and takes the tool evidence
+    gathered so far with it — the one thing worth keeping when the model
+    goes away mid-diagnosis.
+    """
+
+
 class LLMClient:
     def __init__(self, base_url: str | None = None, api_key: str | None = None,
                  model: str | None = None, temperature: float = 0.1,
-                 timeout: int = 120):
+                 timeout: int | None = None, retries: int | None = None):
         self.base_url = (base_url or os.environ.get(
             "SF_LLM_BASE_URL", "https://api.deepseek.com/v1")).rstrip("/")
         self.api_key = api_key if api_key is not None else os.environ.get("SF_LLM_API_KEY", "")
         self.model = model or os.environ.get("SF_LLM_MODEL", "deepseek-chat")
         self.temperature = temperature
-        self.timeout = timeout
+        # A thinking model spends a long time before the first byte arrives,
+        # and a 120 s read timeout killed a whole run at round 1.  Default
+        # higher, tunable per environment.
+        self.timeout = timeout if timeout is not None else int(
+            os.environ.get("SF_LLM_TIMEOUT", "300"))
+        self.retries = retries if retries is not None else int(
+            os.environ.get("SF_LLM_RETRIES", "1"))
 
     @property
     def available(self) -> bool:
@@ -255,15 +273,42 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {self.api_key}"},
-        )
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        return body["choices"][0]["message"]
+        url = f"{self.base_url}/chat/completions"
+        last: Exception | None = None
+        for attempt in range(self.retries + 1):
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {self.api_key}"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                return body["choices"][0]["message"]
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:300]
+                # 429 and 5xx are worth another try; 4xx (auth, bad model
+                # name, bad request) will fail identically forever.
+                if exc.code == 429 or exc.code >= 500:
+                    last = exc
+                    if attempt < self.retries:
+                        time.sleep(2 ** attempt)
+                        continue
+                raise LLMUnavailable(
+                    f"HTTP {exc.code} from {url}: {detail}") from exc
+            except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+                last = exc
+                if attempt < self.retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise LLMUnavailable(
+                    f"{type(exc).__name__}: {exc} after {self.retries + 1} "
+                    f"attempt(s) with a {self.timeout}s read timeout — raise "
+                    f"SF_LLM_TIMEOUT if the model is simply slow") from exc
+            except (json.JSONDecodeError, KeyError, IndexError) as exc:
+                raise LLMUnavailable(f"malformed response from {url}: {exc}") from exc
+        raise LLMUnavailable(f"unreachable: {last}")
 
 
 def _tool_message(call_id: str, payload: dict) -> dict:
@@ -313,9 +358,28 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
     # trips the loop-breaker below.
     seen: dict[str, dict] = {}
 
+    def ask(messages: list[dict], tools: list[dict] | None = None) -> dict | None:
+        """One model call, degrading instead of dying.
+
+        The endpoint went away mid-diagnosis once already (a read timeout at
+        round 1 killed the process and every tool result with it).  On
+        failure the loop stops here and the evidence gathered so far is
+        assembled mechanically — the run stays useful even when the model
+        does not.
+        """
+        try:
+            return llm.chat(messages, tools=tools)
+        except LLMUnavailable as exc:
+            run.answer = (f"The model endpoint became unreachable: {exc}\n"
+                          "The run stopped there. Here is the evidence gathered "
+                          "before it did:\n" + _offline_answer(run))
+            return None
+
     for round_no in range(1, max_rounds + 1):
         run.rounds = round_no
-        message = llm.chat(messages, tools=TOOL_SPECS)
+        message = ask(messages, tools=TOOL_SPECS)
+        if message is None:
+            return run
         messages.append(message)
         calls = message.get("tool_calls") or []
         if not calls:
@@ -331,7 +395,9 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
             messages.append({"role": "user", "content":
                 "Your last reply was empty. Answer the original question now, "
                 "in plain text, citing the tool results you already have."})
-            final = llm.chat(messages)
+            final = ask(messages)
+            if final is None:
+                return run
             run.answer = (re.sub(r"<think>.*?</think>", "",
                                  final.get("content") or "", flags=re.S).strip()
                           or _offline_answer(run))
@@ -379,7 +445,9 @@ def _run_llm(question: str, toolbox: Toolbox, llm: LLMClient,
         # away so its only move is a plain-text answer; if it still returns
         # nothing, assemble the evidence mechanically.
         if calls and not executed_any:
-            final = llm.chat(messages)
+            final = ask(messages)
+            if final is None:
+                return run
             run.answer = (re.sub(r"<think>.*?</think>", "",
                                  final.get("content") or "", flags=re.S).strip()
                           or _offline_answer(run))

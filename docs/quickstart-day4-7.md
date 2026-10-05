@@ -716,6 +716,11 @@ export SF_LLM_API_KEY=sk-硅基流动的key
 export SF_LLM_BASE_URL=https://api.siliconflow.cn/v1
 export SF_LLM_MODEL=Qwen/Qwen3-8B          # 免费档，官方标注支持工具调用
 # 备选：deepseek-ai/DeepSeek-V3.2（付费但极便宜，function calling 成熟）
+
+# 慢模型可调（可选）：thinking 模型首轮思考很久，读超时默认 300 秒，
+# 超时后自动重试 1 次；仍失败则用已收集的工具证据兜底作答，不会崩掉整轮
+export SF_LLM_TIMEOUT=300
+export SF_LLM_RETRIES=1
 ```
 
 > **agent_cli 会自动读取 `~/.schemafence.env`**（启动时 header 有一行 `env file : ...`
