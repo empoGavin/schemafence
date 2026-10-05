@@ -225,7 +225,7 @@ git version 2.47.1
 先在 Windows 上确认已经推送 `[Win]`：
 
 ```bash
-cd C:\Users\75261\schemafence
+cd %USERPROFILE%\schemafence
 git status
 ```
 
@@ -253,7 +253,7 @@ LICENSE  README.md  demo.py  docker-compose.yml  docs  examples  requirements.tx
 
 ### 路线 B：不走 GitHub，直接从 Windows 传
 
-用 WinSCP（见 2.3）把整个 `C:\Users\75261\schemafence` 文件夹拖到虚拟机的 `/home/<你的用户名>/` 下。
+用 WinSCP（见 2.3）把整个 `%USERPROFILE%\schemafence` 文件夹拖到虚拟机的 `/home/<你的用户名>/` 下。
 
 > 传之前建议在 Windows 上把 `.git` 文件夹临时改名为 `.git_bak`，传完再改回来 —— 跨系统拷贝 `.git` 偶尔会因权限报错。
 
@@ -309,12 +309,12 @@ bash scripts/setup_pg.sh
 | 3 | 装 pgvector | 自动装编译工具（`gcc make git postgresql-server-devel`）→ `git clone v0.8.7` → `make install` → `restorecon` | ⚠️ **默认源码编译最新版 0.8.7**。注意：OL10 的 `postgresql-devel` 不带 `pg_config`，必须用 `postgresql-server-devel`（脚本已处理）。发行版包只有 0.6.x，默认不用；想省事用旧版就 `PGVECTOR_FROM_DIST=1 bash scripts/setup_pg.sh` |
 | 4 | **初始化数据目录** | `postgresql-setup --initdb` | ⚠️ **RHEL 系独有**。Debian 系是装包时自动初始化的，RHEL 系必须显式执行，否则服务起不来 |
 | 5 | 启动服务 | `systemctl enable --now postgresql` | ⚠️ **RHEL 系服务名是 `postgresql`**（不是 Ubuntu 的 `postgresql@16-main`）；debian 系还要 `pg_ctlcluster` |
-| 6 | **修认证方式** | 把 `pg_hba.conf` 里的 `ident` 改成 `scram-sha-256` | ⚠️ **RHEL 系独有且关键**，详见下一节 |
+| 6 | **修认证方式** | 把 `pg_hba.conf` 里的 `ident` 改成 `scram-sha-256` | ⚠️ **RHEL 系独有**，详见下一节 |
 | 7 | 设密码 | `ALTER USER postgres PASSWORD 'pgvec123'` | 让程序能用密码经 TCP 连进来 |
 | 8 | 建库 | `createdb fence_demo` | 新建一个空库 |
 | 9 | 灌示例 + 收统计 | `psql -f examples/sample_schema.sql` + `ANALYZE;` | 建 7 张表（含 6 类真实陷阱）+ 生成 `pg_stats` |
 
-### 5.3 ⚠️ 最关键的一处差异：`ident` 必须改成 `scram-sha-256`
+### 5.3 ⚠️ 最容易踩的一处差异：`ident` 必须改成 `scram-sha-256`
 
 **这是 Oracle Linux 上唯一一处"不改就必然失败"的地方，值得单独讲清楚。**
 
@@ -415,7 +415,7 @@ sudo -u postgres psql -d fence_demo -c "\dt shop.*"
 | 典型输出 | `16 finding(s): 5 high / 9 medium / 2 low` | `tables read from the catalogue : 7` |
 | 可以跳过吗 | 不建议（它是"克隆下来 5 分钟能跑"的证明） | 可跳过，但第 7 节的价值在于用**真实统计信息**复核同一批检查 |
 
-**记住三句话**：
+三句话概括：
 
 1. **只有 live 模式才需要 `pip install`**。离线模式一个包都不装。
 2. **`pip install` 不是 live 模式的全部前提**——还必须有一个**正在运行的 PG**（第 5 节装好的那个），两者缺一不可。
@@ -481,7 +481,7 @@ python3 demo.py --ask "total order amount for the last week?"
          and nothing in the database stops it picking the wrong one
 ```
 
-**这就是整个项目要解决的问题**：两张表得分一模一样，模型必然会挑一张，而数据库不会阻止它挑错。`shop.orders` 是活数据，`shop.orders_archive` 是归档表 —— 挑错了，报表数字就是错的，**而且不会报任何错**。
+这就是整个项目要处理的那类问题：两张表得分一模一样，模型必然会挑一张，而数据库不会阻止它挑错。`shop.orders` 是活数据，`shop.orders_archive` 是归档表 —— 挑错了，报表数字就是错的，**而且不会报任何错**。
 
 再试中文提问：
 
@@ -574,7 +574,7 @@ python demo.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo
 
 > 进了 venv 之后用 `python` 或 `python3` 都可以。
 
-### 7.4 你该看到什么（本次配置最关键的一段验证）
+### 7.4 你该看到什么（这一步的验证）
 
 在 6.2 那堆输出之后，会多出这么一段：
 
@@ -673,7 +673,7 @@ ERROR:  permission denied for table orders
 > **为什么这一条特别重要**：
 > 6.4 那次拦截是**代码里的规则** —— 规则可以改、可以写错、可以被绕过。
 > 这一条是**数据库层面的物理权限** —— 就算上层代码被绕过、就算有人直接敲 SQL，这个账号也删不掉任何东西。
-> 这是七层护栏里最硬的一层：**不是"我不允许你写"，而是"你根本没有写的权限"**。
+> 七层护栏里这一层最硬：不是代码不允许你写，而是这个账号本身没有写的权限。
 
 ### 7.7 交互式体验一下 PG（可选） `[VM]`
 
@@ -835,7 +835,7 @@ LISTEN 0  244  127.0.0.1:5432  0.0.0.0:*  users:(("postgres",pid=1234,fd=6))
 | 11 | 往系统 Python 装包 | 被 PEP 668 禁止 | 被 PEP 668 禁止 | 🟢 都要用 venv |
 | 12 | 需要订阅注册吗 | 否 | **否**（Oracle Linux 公共源免注册；RHEL 才需要） | 🟢 |
 
-**一句话记住**：**Ubuntu 是"装完就能连"，Oracle Linux 是"装完还要两步（initdb + 改 pg_hba）"。**
+两个发行版的差别：Ubuntu 装完就能连，Oracle Linux 还要两步（`initdb` + 改 `pg_hba`）。
 
 ---
 
@@ -984,7 +984,7 @@ pip install -r requirements.txt
 python demo.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo
 ```
 
-> ⚠️ **关键点**：`source .venv/bin/activate` 和 `python demo.py` **必须在同一个终端会话里**。关掉终端重新 ssh 进来后 `(.venv)` 会消失，必须重新 `source` 一次。
+> ⚠️ 注意：`source .venv/bin/activate` 和 `python demo.py` **必须在同一个终端会话里**。关掉终端重新 ssh 进来后 `(.venv)` 会消失，必须重新 `source` 一次。
 >
 > 判断有没有进 venv：**看提示符前面有没有 `(.venv)`**。
 
@@ -1072,7 +1072,7 @@ sudo systemctl restart postgresql
 
 Oracle Linux 10 自带的 PG 是 16；pgvector 我们已经源码装到了最新的 0.8.7。想再跟上游主要是换 PG 主版本：
 
-- **pgvector 0.8.x** 新增了迭代式索引扫描（`hnsw.iterative_scan`），在"带 WHERE 过滤的向量检索"上明显更好 —— 这是 schemafence Day 4–7 会碰到的场景。
+- **pgvector 0.8.x** 新增了迭代式索引扫描（`hnsw.iterative_scan`），在"带 WHERE 过滤的向量检索"上明显更好——schemafence 的知识层检索正好属于这类场景。
 - **PG 17 / 18** 有增量排序、`pg_stat_io` 等改进。
 
 **用 PGDG 仓库替换成新版**（PGDG 对 EL10 官方支持）：

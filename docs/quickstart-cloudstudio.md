@@ -1,4 +1,4 @@
-# schemafence · Cloud Studio 实操手册（Day 3）
+# schemafence · Cloud Studio 实操手册
 
 > 目标：在腾讯云 Cloud Studio 的免费机时上，把「数据库 AI Agent」跑起来，
 > 并用它演示一次「AI 生成的 SQL 看起来对、其实错」的拦截过程。
@@ -26,18 +26,18 @@ Cloud Studio 的工作空间本身就是一个容器，里面**没有 systemd**�
 | GPU T4 | 1.2 | ❌ 本项目完全用不到 |
 | GPU A10 / L40 | 3.3 / 8 | ❌ 开了就是在烧额度 |
 
-即使是首次绑定赠送的 20 机时，在 2 核 4G 上也能跑 **80 小时**——足够整个国庆七天。
+即使是首次绑定赠送的 20 机时，在 2 核 4G 上也能跑 **80 小时**，调试期基本够用。
 另外平台通常还有每月免费额度（标准版口径约 1 万分钟），**具体以控制台「我的额度」页面为准，先看一眼再建空间**。
 
 **结论三：这个项目不需要 API key。**
 「约束层」是确定性的代码，不是模型。所以离线 demo 零依赖、零费用、断网也能跑。
-模型要到 Day 5 接 Agent 循环时才需要——那时候再配 key 也不迟。
+模型要到接上 Agent 循环时才需要，那时候再配 key 也不迟。
 
 ---
 
 ## 1. 准备：先在本机确认 demo 能跑（2 分钟，零成本）
 
-还没建空间之前，先确认代码本身是好的。在你本机的 `C:\Users\75261\schemafence` 目录：
+还没建空间之前，先确认代码本身是好的。在你本机的 `%USERPROFILE%\schemafence` 目录：
 
 ```bash
 python demo.py
@@ -169,10 +169,10 @@ python3 demo.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo
   same checks, live data → 16 finding(s) (5 high, 9 medium, 2 low)
 ```
 
-**注意这里两个刻意为之的设计，都是面试时能讲的东西**：
+这里有两处刻意的设计：
 
-- **行数用 `pg_class.reltuples` 估算，不用 `COUNT(*)`** —— 体检工具不该把它检查的库压垮。这是 DBA 的第一反应，纯 AI 背景的人不会想到。
-- **NULL 比例来自 `pg_stats`，是实测数据而不是猜的** —— `shop.orders.user_id` 有 20% 为 NULL，也就是"五笔订单里有一笔，一旦 JOIN 就消失"。这句话可以直接用在简历和面试里。
+- **行数用 `pg_class.reltuples` 估算，不用 `COUNT(*)`** —— 体检工具不该把它检查的库压垮，这是 DBA 的习惯。
+- **NULL 比例来自 `pg_stats`，是实测数据而不是猜的** —— `shop.orders.user_id` 有 20% 为 NULL，也就是"五笔订单里有一笔，一旦 JOIN 就消失"。
 
 ---
 
@@ -197,7 +197,7 @@ psql "postgresql://agent_ro:ro_only@localhost:5432/fence_demo" \
 # 预期：ERROR:  permission denied for table orders
 ```
 
-**这个报错就是七层护栏的第一层，也是最硬的一层。** 截图存下来，Day 6 录 demo 要用。
+这个报错来自七层护栏的第一层，也是最硬的一层：拒绝发生在数据库自己那里，不是代码里的一句判断。想留证据就截个图。
 
 ---
 
@@ -220,9 +220,9 @@ llm  text-to-sql  nl2sql  postgresql  guardrails  ai-agent  pgvector  data-migra
 
 ---
 
-## 8. Day 3 验收清单
+## 8. 搭建验收清单
 
-对照 7 天计划里 Day 3 的三项产物，逐条打勾：
+逐条打勾：
 
 - [ ] 离线 demo 跑通（截图：16 findings + 13 cases passed）
 - [ ] `SELECT version();` 有输出（证明集群起来了）
@@ -231,7 +231,6 @@ llm  text-to-sql  nl2sql  postgresql  guardrails  ai-agent  pgvector  data-migra
 - [ ] `agent_ro` 删除数据被拒绝（截图那个 permission denied）
 - [ ] 一页原理笔记：embedding 在干什么 / 余弦距离为什么比欧氏距离适合文本 / RAG 三段式 / 什么时候该微调而不是 RAG
 - [ ] 代码已 push
-- [ ] 英语 1 小时：10 个专业词（`vector` `embedding` `retrieval` `similarity` `index` `schema` `query plan` `bloat` `subtransaction` `failover`）
 
 ---
 
@@ -250,16 +249,16 @@ llm  text-to-sql  nl2sql  postgresql  guardrails  ai-agent  pgvector  data-migra
 
 ---
 
-## 10. 接下来四天怎么接
+## 10. 后面还能往上加什么
 
-| Day | 在这个骨架上加什么 | 关键动作 |
+| 接下来 | 加什么 | 具体动作 |
 |-----|-------------------|---------|
-| 4 | **把 3 维换成 1024 维真实 embedding** | 新建 `doc_chunks` 表（计划 2.3 节），用 `pgvector` 存 schema 快照和脱敏文档；对比 256/512/1024 三种切片粒度的 Top-5 命中率 |
-| 5 | **接真模型，做工具调用** | `--llm openai` 分支：`search_docs` / `run_sql` / `explain_sql` / `get_table_stats` 四个工具 + 主循环；把每一步打印出来（这是 demo 录屏素材） |
-| 6 | **把护栏挂到真实执行路径上** | live 模式改成用 `agent_ro` 连接；加失败自纠；跑三个刁钻问题（"帮我删掉这张表"必须被拒） |
-| 7 | **开源收尾** | 更新 README 的 Quick Start 与效果数据；录 3 分钟英文 demo；回填中英文简历 |
+| 真实嵌入 | 把 3 维换成 1024 维 | 新建 `doc_chunks` 表（计划 2.3 节），用 `pgvector` 存 schema 快照和脱敏文档；对比 256/512/1024 三种切片粒度的 Top-5 命中率 |
+| 工具调用 | 接真模型 | `--llm openai` 分支：`search_docs` / `run_sql` / `explain_sql` / `get_table_stats` 四个工具 + 主循环；把每一步打印出来 |
+| 护栏上真实路径 | live 模式改用 `agent_ro` 连接 | 加失败自纠；跑几个刁钻问题（"帮我删掉这张表"必须被拒） |
+| 收尾 | 开源 | 更新 README 的 Quick Start 与效果数据 |
 
-**一句话**：今天搭好的是「约束层」—— 它不需要模型就能工作，这既是工程选择，也是你面试时最有力的论点。
+**小结**：这一节搭好的是「约束层」——它不需要模型就能工作，这是工程上的分界点，也是后面所有功能的地基。
 
 ---
 
@@ -268,7 +267,7 @@ llm  text-to-sql  nl2sql  postgresql  guardrails  ai-agent  pgvector  data-migra
 离线 demo 在你本机就能跑，用来改代码最快：
 
 ```bash
-cd C:\Users\75261\schemafence
+cd %USERPROFILE%\schemafence
 python demo.py
 python demo.py --ask "哪个表存了退款信息？"
 ```
