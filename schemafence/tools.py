@@ -20,6 +20,7 @@ question "how do you know it behaved?".
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -171,10 +172,20 @@ class Toolbox:
     def __init__(self, store=None, conn=None, whitelist=None,
                  trace_path: str | Path = "agent_trace.jsonl",
                  max_rows: int = 100, timeout_ms: int = 10_000,
-                 search_path: str | None = None):
+                 search_path: str | None = None,
+                 doc_min_score: float | None = None):
         self.store = store
         self.conn = conn
         self.whitelist = whitelist
+        # Read-only tools are not the only thing that needs a fence: a
+        # retrieval result below the relevance floor is noise, and noise
+        # handed to a model that was told to cite becomes a citation.
+        # None means "pick a default from the embedding mode" (see
+        # search_docs); SF_DOC_MIN_SCORE overrides for everyone.
+        if doc_min_score is None:
+            raw = os.environ.get("SF_DOC_MIN_SCORE")
+            doc_min_score = float(raw) if raw not in (None, "") else None
+        self.doc_min_score = doc_min_score
         self.trace_path = Path(trace_path)
         self.max_rows = max_rows
         self.timeout_ms = timeout_ms
@@ -258,9 +269,31 @@ class Toolbox:
                         "run agent_cli.py --ingest first. Do not retry "
                         "search_docs until the operator has done that."}
             raise
-        return {"ok": True, "hits": [
-            {"source": h.source, "section": h.section, "score": h.score,
-             "snippet": _clip(h.content)} for h in hits], "k": k}
+        # Relevance floor.  Top-k always returns k passages — the nearest
+        # neighbours of a question the corpus does not cover are still
+        # returned, and a model told to cite something will cite them
+        # (the "idle in transaction" answer leaned on a subtransaction
+        # case that had nothing to do with it).  Below the floor a
+        # passage is noise; returning nothing is a legitimate answer and
+        # the model is told so explicitly.  The default is a starting
+        # point — calibrate it against the top-1 score column of --eval.
+        floor = self.doc_min_score
+        if floor is None:
+            floor = 0.45 if embedder is not None else 0.0
+        kept = [h for h in hits if h.score >= floor]
+        out = {"ok": True, "k": k, "min_score": floor,
+               "top_score": round(hits[0].score, 4) if hits else None,
+               "dropped_below_floor": len(hits) - len(kept),
+               "hits": [{"source": h.source, "section": h.section,
+                         "score": h.score, "snippet": _clip(h.content)}
+                        for h in kept]}
+        if not kept:
+            out["note"] = ("no passage scored at or above the relevance floor "
+                           f"({floor}); the closest scored {out['top_score']}. "
+                           "The knowledge base has no matching note — say that "
+                           "plainly and answer from the tool evidence, do not "
+                           "stretch a near-miss passage into a citation.")
+        return out
 
     def run_sql(self, sql: str) -> dict:
         verdict = guard(sql, max_rows=self.max_rows, table_whitelist=self.whitelist,

@@ -247,7 +247,8 @@ def cmd_ask(args, embedder: Embedder) -> int:
     conn = attach_database(args, store)
     toolbox = Toolbox(store=store, conn=conn, whitelist=args.whitelist or None,
                       trace_path=args.trace, max_rows=args.max_rows,
-                      search_path=args.search_path)
+                      search_path=args.search_path,
+                      doc_min_score=getattr(args, "min_score", None))
     schema = load_schema(args)
     llm = LLMClient() if args.llm != "rules" else None
     if llm is not None:
@@ -433,7 +434,11 @@ def evaluate(store, embedder: Embedder, questions, k: int) -> dict:
         found = store.search(embedder.one(question), k=k)
         elapsed += time.perf_counter() - started
         rank = next((i for i, hit in enumerate(found, 1) if hit.source == gold), None)
-        ranks.append((question, gold, rank))
+        # The top-1 score is the raw material for calibrating
+        # SF_DOC_MIN_SCORE: the lowest top-1 score among the questions that
+        # DID retrieve their gold note is the highest floor that loses
+        # nothing — anything above it starts throwing away real hits.
+        ranks.append((question, gold, rank, found[0].score if found else None))
         if rank:
             hits += 1
         else:
@@ -461,14 +466,22 @@ def cmd_eval(args, embedder: Embedder) -> int:
     print(f"  hit rate    : {result['hit_rate'] * 100:.1f}%")
     print(f"  avg latency : {result['avg_ms']:.1f} ms")
     print()
-    for question, gold, rank in result["rows"]:
+    for question, gold, rank, top_score in result["rows"]:
         mark = f"hit  (rank {rank})" if rank else "MISS"
-        print(f"  {mark:<14} {question[:44]:<46} → {gold}")
+        score = f"{top_score:.3f}" if top_score is not None else "  -  "
+        print(f"  {mark:<14} {score:>6}  {question[:40]:<42} → {gold}")
     if result["misses"]:
         print()
         print("  what the misses retrieved instead:")
         for question, gold, got in result["misses"]:
             print(f"    {question[:40]}  (want {gold}, got {', '.join(got[:3]) or 'nothing'})")
+    scored = [s for _q, _g, rank, s in result["rows"] if rank and s is not None]
+    if scored:
+        print()
+        print(f"  top-1 score floor to calibrate against: the lowest score among "
+              f"the questions that hit is {min(scored):.3f}.")
+        print(f"  Set SF_DOC_MIN_SCORE just below it (e.g. {min(scored) - 0.05:.2f}) "
+              f"to keep every real hit and drop the near-misses.")
     return 0
 
 
@@ -569,12 +582,13 @@ def cmd_report(args, embedder: Embedder) -> int:
         "",
         "## 2. 逐题结果",
         "",
-        "| # | 问题 | 期望来源 | 命中 | 排名 |",
-        "|---|------|---------|------|------|",
+        "| # | 问题 | 期望来源 | 命中 | 排名 | top-1 分数 |",
+        "|---|------|---------|------|------|-----------|",
     ]
-    for index, (question, gold, rank) in enumerate(result["rows"], 1):
+    for index, (question, gold, rank, top_score) in enumerate(result["rows"], 1):
+        score = f"{top_score:.3f}" if top_score is not None else "—"
         lines.append(f"| {index} | {question} | {gold} | "
-                     f"{'✅' if rank else '❌'} | {rank or '—'} |")
+                     f"{'✅' if rank else '❌'} | {rank or '—'} | {score} |")
 
     lines += ["", "## 3. 失效样本", ""]
     if result["misses"]:
@@ -635,6 +649,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk", type=int, default=512, help="target tokens per chunk")
     parser.add_argument("--overlap", type=int, default=64)
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument("--min-score", type=float, default=None, metavar="F",
+                        help="relevance floor for search_docs (default: 0.45 with "
+                             "API embeddings, 0 with the offline hash embedder). "
+                             "Calibrate from the top-1 score column of --eval")
     parser.add_argument("--max-rows", type=int, default=100)
     parser.add_argument("--whitelist", nargs="*", default=[],
                         help="tables the guard will allow (default: any)")

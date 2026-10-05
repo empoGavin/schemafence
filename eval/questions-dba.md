@@ -2,7 +2,7 @@
 
 规则：**每一题的"期望来源"必须是一篇真实存在的笔记**。改语料的时候同步改这张表。
 
-- 语料目录：`examples/knowledge-dba/`（13 篇合成语料，虚构场景 + 公开 PostgreSQL 知识）
+- 语料目录：`examples/knowledge-dba/`（14 篇合成语料，虚构场景 + 公开 PostgreSQL 知识）
 - 用法：`python agent_cli.py --corpus examples/knowledge-dba --store .schemafence/dba.json --ingest examples/knowledge-dba --eval --eval-file eval/questions-dba.md`
 - 判定：返回的 top-k 里出现"期望来源"记为命中
 
@@ -49,6 +49,9 @@
 | 39 | 订单表查询走了顺序扫描，是不是该加个索引？ | pg-bloat-seq-scan |
 | 40 | 死元组占比多少说明表膨胀已经需要处理？ | pg-bloat-seq-scan |
 | 41 | VACUUM FULL 和 pg_repack 应该怎么选？ | pg-bloat-seq-scan |
+| 42 | idle in transaction 一般原因是什么，有什么后果？ | pg-idle-in-transaction |
+| 43 | 事务挂着不提交，会不会挡住 VACUUM？ | pg-idle-in-transaction |
+| 44 | 怎么找出 idle in transaction 的事务并安全清掉它？ | pg-idle-in-transaction |
 
 ## 说明
 

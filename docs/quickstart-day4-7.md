@@ -721,6 +721,12 @@ export SF_LLM_MODEL=Qwen/Qwen3-8B          # 免费档，官方标注支持工�
 # 超时后自动重试 1 次；仍失败则用已收集的工具证据兜底作答，不会崩掉整轮
 export SF_LLM_TIMEOUT=300
 export SF_LLM_RETRIES=1
+
+# 检索相关度地板（可选）：低于它的 passage 直接不返回，避免模型拿近邻硬凑引用。
+# 默认 API 嵌入 0.45、离线哈希 0.0（离线分数整体偏低，设了会误杀）。
+# 标定方法：跑 --eval，它现在会打印每题 top-1 分数，把地板设在
+# "命中题里最低的那个分数"再往下一点即可。
+export SF_DOC_MIN_SCORE=0.45
 ```
 
 > **agent_cli 会自动读取 `~/.schemafence.env`**（启动时 header 有一行 `env file : ...`

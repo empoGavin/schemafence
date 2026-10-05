@@ -65,9 +65,16 @@ answers:
      This step is NOT optional: strong priors make common topics feel
      familiar, but the runbook carries the operational warnings memory
      does not have (lock levels, repack trade-offs, in-house thresholds);
-  4. only then suggest fixes — cite the passage you found (or say plainly
-     that none matched), and never suggest a new index before ruling out
-     bloat, because an index on a bloated table helps nobody.
+  4. judge what came back before you use it.  A passage is evidence only
+     if it addresses the question actually asked — a note about
+     subtransactions does not answer a question about idle transactions,
+     even if both mention long transactions.  State plainly that the
+     knowledge base has no matching note when that is the case; a
+     near-miss dressed up as an answer is worse than an honest gap,
+     because the citation makes it look verified.
+  5. only then suggest fixes — cite the passage you found (or say none
+     matched), and never suggest a new index before ruling out bloat,
+     because an index on a bloated table helps nobody.
 """
 
 DESTRUCTIVE = ("删掉", "删除", "清空", "清除", "改一下", "改掉", "drop", "delete",
