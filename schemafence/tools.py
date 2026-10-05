@@ -31,6 +31,14 @@ from .guard import guard
 
 MAX_CELL = 200
 
+# Where a retrieved passage stops being evidence.  Similarities from a real
+# embedding model live around 0.5-0.7, so 0.45 is a starting point to be
+# calibrated from the top-1 score column of --eval.  It is NOT applied to the
+# offline hashed embedder, whose scores are an order of magnitude lower
+# (0.089-0.285 on the bundled corpus) — an absolute floor there would throw
+# away every real hit.
+DEFAULT_DOC_MIN_SCORE = 0.45
+
 TOOL_SPECS: list[dict] = [
     {
         "type": "function",
@@ -277,9 +285,17 @@ class Toolbox:
         # passage is noise; returning nothing is a legitimate answer and
         # the model is told so explicitly.  The default is a starting
         # point — calibrate it against the top-1 score column of --eval.
+        #
+        # Keyed on the embedder's MODE, not on whether an embedder is
+        # attached: the CLI always attaches one (offline runs included),
+        # so testing for its presence applied the API floor to hashed
+        # lexical scores that run 5-10x lower — every passage dropped,
+        # the agent answering "the note may not exist yet" about notes
+        # it had just ingested.
         floor = self.doc_min_score
         if floor is None:
-            floor = 0.45 if embedder is not None else 0.0
+            mode = getattr(embedder, "mode", "offline") if embedder is not None else "offline"
+            floor = 0.0 if mode == "offline" else DEFAULT_DOC_MIN_SCORE
         kept = [h for h in hits if h.score >= floor]
         out = {"ok": True, "k": k, "min_score": floor,
                "top_score": round(hits[0].score, 4) if hits else None,
@@ -402,3 +418,80 @@ class Toolbox:
         if clip:
             return columns, [[_clip(v) for v in row] for row in rows[:self.max_rows]]
         return columns, list(rows[:self.max_rows])
+
+
+# --------------------------------------------------------------------------- #
+# [tools] selftest — every tool, with no database and no network
+# --------------------------------------------------------------------------- #
+
+def run_tool_selftest() -> tuple[list[tuple[str, str, bool]], bool]:
+    """Smoke-test the tool layer with nothing attached.
+
+    This exists because of a bug the unit tests did not catch: the relevance
+    floor asked "is an embedder attached?", but ``open_store`` attaches one on
+    every path — offline runs included — so offline answers were filtered with
+    the API floor (0.45) against hashed lexical scores in the 0.08–0.28 range.
+    Every passage was dropped, and the agent told the user "the note may not
+    exist yet" about notes it had just ingested.  The test that missed it
+    constructed a store with ``embedder = None``, i.e. the wiring the product
+    does not use.
+
+    So this builds the store the way the CLI builds it, and asserts on the
+    observable behaviour: passages come back offline, the floor is honoured
+    when set, a missing database is *reported* rather than raised, and bad
+    arguments do not take the process down.
+
+    Returns (rows, passed_all) with rows shaped like the guard and router
+    selftests so demo.py can print all three the same way.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from .knowledge import Embedder, JsonStore, ingest_directory
+
+    rows: list[tuple[str, str, bool]] = []
+
+    def check(name: str, expected: str, ok: bool) -> None:
+        rows.append((name, expected, bool(ok)))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "pg-bloat.md").write_text(
+            "# 判定标准\n死元组占比超过 20%，且 autovacuum 长时间没有运行，"
+            "就先治理膨胀，再考虑加索引。\n",
+            encoding="utf-8")
+        embedder = Embedder(mode="offline", dim=64)
+        store = JsonStore(root / "store.json", dim=64)
+        ingest_directory(root, store, embedder)
+        store.embedder = embedder            # exactly what open_store() does
+        box = Toolbox(store=store, trace_path=root / "trace.jsonl")
+
+        result = box.call("search_docs", {"query": "死元组占比多少要治理膨胀？", "k": 5})
+        check("search_docs / offline hit",
+              "ok, hits>=1, floor 0",
+              result.ok and len(result.data.get("hits") or []) >= 1
+              and result.data.get("min_score") == 0.0)
+
+        strict = Toolbox(store=store, trace_path=root / "trace.jsonl",
+                         doc_min_score=0.99)
+        result = strict.call("search_docs", {"query": "死元组占比多少要治理膨胀？", "k": 5})
+        check("search_docs / floor honoured",
+              "ok, 0 hits + note",
+              result.ok and not result.data.get("hits")
+              and "no matching note" in (result.data.get("note") or ""))
+
+        for name, args in (("run_sql", {"sql": "SELECT 1"}),
+                           ("explain_sql", {"sql": "SELECT 1"}),
+                           ("get_table_stats", {})):
+            result = box.call(name, args)
+            message = str(result.data.get("error") or result.data.get("reason") or "")
+            check(f"{name} / no database",
+                  "ok=False, says so",
+                  (not result.ok) and "no database" in message)
+
+        result = box.call("get_table_stats", {"bogus": 1})
+        check("get_table_stats / bad args",
+              "decision=bad-arguments",
+              result.decision == "bad-arguments")
+
+    return rows, all(passed for _, _, passed in rows)

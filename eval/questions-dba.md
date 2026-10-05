@@ -1,6 +1,8 @@
 # 评测题库（合成 DBA 语料包）
 
 规则：**每一题的"期望来源"必须是一篇真实存在的笔记**。改语料的时候同步改这张表。
+若一题在语料里有两个都真正对口的笔记（相邻主题），写成 `甲 / 乙` —— 命中任一即算命中，
+否则单标注的尺子会把"答对了但用了另一篇"记成失败。
 
 - 语料目录：`examples/knowledge-dba/`（14 篇合成语料，虚构场景 + 公开 PostgreSQL 知识）
 - 用法：`python agent_cli.py --corpus examples/knowledge-dba --store .schemafence/dba.json --ingest examples/knowledge-dba --eval --eval-file eval/questions-dba.md`
@@ -16,7 +18,7 @@
 | 6 | 连接数被打满，应该从哪里开始排查？ | pg-connection-pool |
 | 7 | autovacuum 为什么清不掉死元组？ | pg-vacuum-tuning |
 | 8 | 大表的 autovacuum 触发阈值应该怎么调？ | pg-vacuum-tuning |
-| 9 | 膨胀到多少才需要上 VACUUM FULL 或者 pg_repack？ | pg-vacuum-tuning |
+| 9 | 膨胀到多少才需要上 VACUUM FULL 或者 pg_repack？ | pg-vacuum-tuning / pg-bloat-seq-scan |
 | 10 | 怎么确认 WAL 归档是正常的？ | pg-backup-pitr |
 | 11 | RPO 和 RTO 应该怎么定？ | pg-backup-pitr |
 | 12 | 为什么说没演练过的备份等于没有备份？ | pg-backup-pitr |

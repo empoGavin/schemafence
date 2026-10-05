@@ -23,6 +23,7 @@ from schemafence import analyze, parse_ddl, summarize            # noqa: E402
 from schemafence.agent import run_route_selftest                 # noqa: E402
 from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.planner import plan                             # noqa: E402
+from schemafence.tools import run_tool_selftest                  # noqa: E402
 
 WIDTH = 68
 CHECK_TITLES = {
@@ -114,6 +115,21 @@ def show_route_selftest() -> bool:
     return passed_all
 
 
+def show_tool_selftest() -> bool:
+    heading("[tools] four tools, no database attached")
+    rows, passed_all = run_tool_selftest()
+    for name, expected, passed in rows:
+        mark = "ok  " if passed else "FAIL"
+        print(f"  {mark} {name:<34} {expected}")
+    print()
+    print("  the tools report what they cannot do instead of guessing, and the")
+    print("  offline store still retrieves: presence of an embedder is not the")
+    print("  same as a semantic one, and an API-grade relevance floor applied")
+    print("  to lexical scores drops every passage there is.")
+    print(f"  {len(rows)} cases → {'all passed' if passed_all else 'FAILURES present'}")
+    return passed_all
+
+
 def show_live(dsn: str, schema) -> None:
     from schemafence import snapshot
 
@@ -169,7 +185,7 @@ def main(argv=None) -> int:
                         help="exit non-zero if a finding at this level or above exists")
     args = parser.parse_args(argv)
 
-    print("schemafence — the constraint layer between LLMs and databases")
+    print("schemafence — the DBA agent, and the fence in front of the database")
     rule("=")
 
     source = Path(args.source)
@@ -194,6 +210,7 @@ def main(argv=None) -> int:
 
     guard_ok = show_guard_selftest()
     route_ok = show_route_selftest()
+    tool_ok = show_tool_selftest()
 
     if args.ask:
         show_plan(args.ask, schema)
@@ -215,6 +232,8 @@ def main(argv=None) -> int:
     if not guard_ok:
         return 1
     if not route_ok:
+        return 1
+    if not tool_ok:
         return 1
     return 0
 

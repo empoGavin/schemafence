@@ -426,6 +426,18 @@ def cmd_genq(args, embedder: Embedder) -> int:
     return 0
 
 
+def _gold_sources(gold: str) -> set[str]:
+    """A question may legitimately be answerable by more than one note.
+
+    Once the corpus has adjacent notes ('table bloat, treatment' next to
+    'table bloat, misdiagnosis') a single-label ruler scores a true hit as a
+    miss and the hit rate drifts down for a reason that has nothing to do
+    with retrieval.  A question's 期望来源 may therefore list alternatives
+    separated by '/'.
+    """
+    return {part.strip() for part in gold.replace("|", "/").split("/") if part.strip()}
+
+
 def evaluate(store, embedder: Embedder, questions, k: int) -> dict:
     hits, ranks, misses = 0, [], []
     elapsed = 0.0
@@ -433,7 +445,8 @@ def evaluate(store, embedder: Embedder, questions, k: int) -> dict:
         started = time.perf_counter()
         found = store.search(embedder.one(question), k=k)
         elapsed += time.perf_counter() - started
-        rank = next((i for i, hit in enumerate(found, 1) if hit.source == gold), None)
+        wanted = _gold_sources(gold)
+        rank = next((i for i, hit in enumerate(found, 1) if hit.source in wanted), None)
         # The top-1 score is the raw material for calibrating
         # SF_DOC_MIN_SCORE: the lowest top-1 score among the questions that
         # DID retrieve their gold note is the highest floor that loses
@@ -542,7 +555,12 @@ def cmd_tune(args, embedder: Embedder) -> int:
 
 
 def cmd_report(args, embedder: Embedder) -> int:
-    """Generate eval/report.md — the Day 4 artefact, numbers included."""
+    """Generate eval/report.md — the retrieval-layer artefact, numbers included.
+
+    Re-running this rewrites sections 3 and 5 (the hand-written failure analysis
+    and conclusions) with placeholders.  Write them back after every run — the
+    numbers are reproducible, the judgement is not.
+    """
     from datetime import date
     questions = load_questions(Path(args.eval_file))
     if not questions:
@@ -559,7 +577,10 @@ def cmd_report(args, embedder: Embedder) -> int:
     stats = store.stats()
 
     lines = [
-        "# 检索评测报告（Day 4）",
+        "# 检索评测报告（RAG 检索层）",
+        "",
+        "> 本文件由 `python agent_cli.py --report eval/report-dba.md` 生成；"
+        "第 3 节（失效原因）与第 5 节（三行结论）是手写的，重跑会覆盖，需补回。",
         "",
         f"- 生成日期：{date.today().isoformat()}",
         f"- 语料：{rel(args.corpus)}（{stats['documents']} 篇 / {stats['chunks']} 片，"
@@ -677,7 +698,7 @@ def main(argv=None) -> int:
 
     applied = load_env_file(ENV_FILE)
     embedder = make_embedder(args)
-    print("schemafence agent — the constraint layer, now with a memory")
+    print("schemafence agent — answers from a DBA knowledge base, executes behind a fence")
     if applied:
         print(f"env file   : {ENV_FILE} sets {', '.join(applied)}")
     elif ENV_FILE.exists():
@@ -700,10 +721,13 @@ def main(argv=None) -> int:
         return cmd_ask(args, embedder)
     if args.genq:
         return cmd_genq(args, embedder)
-    if args.eval:
-        return cmd_eval(args, embedder)
+    # --report first: it runs the eval *and* the tuning grid and writes both.
+    # Checked before --eval because `--eval --report x.md` used to fall into
+    # cmd_eval, print the numbers and silently write no file.
     if args.report:
         return cmd_report(args, embedder)
+    if args.eval:
+        return cmd_eval(args, embedder)
     return cmd_tune(args, embedder)
 
 
