@@ -218,6 +218,20 @@ def knowledge_cases() -> None:
           (not rn.ok) and "not loaded" in (rn.data.get("error") or ""),
           rn.data.get("error", ""))
 
+    # C11/C12 — orphan detection.  PgStore.replace deletes by source, so a
+    # corpus swap leaves the previous notes held and nothing errors; the JSON
+    # store swaps its whole list.  The comparison direction is what has to be
+    # right, so it is tested directly rather than only through an ingest.
+    from agent_cli import orphan_sources
+    two = JsonStore(TMP / "orphan.json", dim=8)
+    two.chunks = [Chunk("a.md", "s", "x", 1, [1.0] + [0.0] * 7),
+                  Chunk("b.md", "s", "y", 1, [0.0, 1.0] + [0.0] * 6)]
+    kept = [c for c in two.chunks if c.source == "a.md"]
+    check("C11", "orphan_sources names the rows the corpus did not cover",
+          orphan_sources(two, kept) == ["b.md"], str(orphan_sources(two, kept)))
+    check("C12", "orphan_sources is empty when the corpus covers the store",
+          orphan_sources(two, two.chunks) == [])
+
 
 # --------------------------------------------------------------------------- #
 # D. CLI behaviour
@@ -315,6 +329,10 @@ def cli_cases() -> None:
              "--store", store, "--corpus", corpus, "--trace", TRACE])
     check("D18", "repeatable --ask handles every question",
           p.returncode == 0 and p.stdout.count("[ask]") == 2, f"rc={p.returncode}")
+
+    p = cli(["--ingest", corpus, "--store", store, "--rebuild"])
+    check("D19", "--rebuild on the JSON backend is a stated no-op, exit 0",
+          p.returncode == 0 and "nothing to empty" in p.stdout, f"rc={p.returncode}")
 
 
 # --------------------------------------------------------------------------- #

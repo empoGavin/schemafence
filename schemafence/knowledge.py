@@ -411,8 +411,18 @@ class JsonStore:
                     score=round(s, 4), token_count=c.token_count)
                 for s, c in scored[:k]]
 
+    def sources(self) -> set[str]:
+        """Every source currently held.
+
+        Ingest compares this against the corpus it just read, to report rows
+        the new corpus did not cover.  For the JSON backend that set is always
+        empty after an ingest, because ``replace`` swaps the whole list — which
+        is exactly the difference the pgvector backend has to be told about.
+        """
+        return {c.source for c in self.chunks}
+
     def stats(self) -> dict:
-        sources = {c.source for c in self.chunks}
+        sources = self.sources()
         total = sum(c.token_count for c in self.chunks)
         return {"documents": len(sources), "chunks": len(self.chunks),
                 "avg_tokens": round(total / len(self.chunks)) if self.chunks else 0,
@@ -470,6 +480,14 @@ class PgStore:
                 cur.execute(HNSW_DDL)
 
     def replace(self, chunks: list[Chunk]) -> int:
+        """Delete the sources this corpus mentions, then insert the new rows.
+
+        Note what this does *not* do: a source that exists in the table but is
+        absent from ``chunks`` is left alone.  That is deliberate — it lets two
+        corpora share one table — but it also means swapping corpora is not a
+        rebuild.  The old notes stay, keep being retrieved, and nothing errors;
+        ``sources()`` is how the CLI notices, and ``truncate()`` is the fix.
+        """
         sources = sorted({c.source for c in chunks})
         with self.conn.cursor() as cur:
             cur.execute("DELETE FROM doc_chunks WHERE source = ANY(%s)", (sources,))
@@ -480,6 +498,21 @@ class PgStore:
                     (c.source, c.section, c.content, c.token_count,
                      _vec_literal(c.vector)))
         return len(chunks)
+
+    def sources(self) -> set[str]:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT source FROM doc_chunks")
+            return {row[0] for row in cur.fetchall()}
+
+    def truncate(self) -> None:
+        """Drop every row regardless of source — what ``--rebuild`` calls.
+
+        TRUNCATE rather than DELETE: the table is about to be refilled from
+        scratch, so there is no reason to leave a page of dead tuples behind
+        for autovacuum to clean up.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute("TRUNCATE doc_chunks")
 
     def search(self, vector: list[float], k: int = 5,
                use_index: bool = True) -> list[Hit]:

@@ -209,11 +209,29 @@ def attach_database(args, store):
 # commands
 # --------------------------------------------------------------------------- #
 
+def orphan_sources(store, chunks) -> list[str]:
+    """Sources the store still holds that this corpus did not mention.
+
+    Only the pgvector backend can have any: its ``replace`` deletes by source,
+    so a corpus swap leaves the previous notes behind.  The JSON store swaps
+    its whole list, so this is always empty there — which is the point of
+    comparing against ``store.sources()`` rather than assuming.
+    """
+    return sorted(store.sources() - {c.source for c in chunks})
+
+
 def cmd_ingest(args, embedder: Embedder) -> int:
     heading("[ingest] chunk → embed → store")
     corpus = Path(args.ingest)
     started = time.perf_counter()
     store = open_store(args, embedder, create=True)
+    if args.rebuild:
+        if hasattr(store, "truncate"):
+            store.truncate()
+            print("  rebuild     : doc_chunks emptied before ingest")
+        else:
+            print("  rebuild     : nothing to empty — this backend is "
+                  "replaced whole")
     chunks = ingest_directory(corpus, store, embedder=embedder,
                               target_tokens=args.chunk, overlap_tokens=args.overlap)
     elapsed = time.perf_counter() - started
@@ -230,6 +248,13 @@ def cmd_ingest(args, embedder: Embedder) -> int:
     print(f"  documents   : {stats['documents']}")
     print(f"  chunks      : {stats['chunks']}   avg {stats['avg_tokens']} tokens")
     print(f"  wall time   : {elapsed:.2f}s")
+    orphans = orphan_sources(store, chunks)
+    if orphans:
+        shown = ", ".join(orphans[:5]) + (" …" if len(orphans) > 5 else "")
+        print(f"  orphan rows : {len(orphans)} source(s) held but not in this "
+              f"corpus: {shown}")
+        print("  what now    : keep them if a second corpus lives here; "
+              "otherwise re-run with --rebuild")
     if isinstance(store, PgStore):
         print(f"  table       : doc_chunks, {stats.get('table_size')}")
         store.close()
@@ -682,6 +707,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "so unqualified table names resolve")
     parser.add_argument("--no-index", action="store_true",
                         help="create doc_chunks without the HNSW index")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="empty doc_chunks before ingesting, so a corpus "
+                             "swap leaves nothing behind (pgvector only; the "
+                             "JSON store is replaced whole anyway)")
     parser.add_argument("--llm", default="rules", choices=["rules", "openai"],
                         help="rules = deterministic router; openai = function calling")
     parser.add_argument("--trace", default="agent_trace.jsonl")
