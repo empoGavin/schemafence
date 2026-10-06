@@ -164,13 +164,17 @@ GUARD_CASES: list[dict] = [
 ]
 
 LIVE_ENV_SQL = """\
--- L7, database side: a role that physically cannot write (layer 7a)
-CREATE ROLE agent_ro LOGIN PASSWORD 'ro_only';
-GRANT CONNECT ON DATABASE fence_demo TO agent_ro;
-GRANT USAGE  ON SCHEMA public TO agent_ro;
-GRANT USAGE  ON SCHEMA shop   TO agent_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO agent_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA shop   TO agent_ro;
+-- L7, database side.  One idempotent script creates the knowledge table and
+-- the role that physically cannot write (layer 7a):
+--
+--   sudo -u postgres psql -d fence_demo -f scripts/setup_rag.sql
+--
+-- It grants SELECT on doc_chunks only.  Layer 7a is also what stops a write
+-- to the shop tables, so grant those too when the agent runs live:
+GRANT USAGE  ON SCHEMA shop TO agent_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA shop TO agent_ro;
+-- The benchmark's own paths need a writable identity instead (they CREATE
+-- TABLE and INSERT); use the postgres DSN there, not agent_ro.
 """
 
 LIVE_VERIFY_CMDS = [
