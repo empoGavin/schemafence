@@ -483,6 +483,48 @@ def layer_case() -> None:
           f"total={payload.get('total')} rows={on_disk}")
 
 
+# --------------------------------------------------------------------------- #
+# H. scale corpus generator — the resource benchmark's input
+# --------------------------------------------------------------------------- #
+def scale_corpus_cases() -> None:
+    """The scale benchmark is only reproducible if its corpus is.
+
+    ``examples/knowledge-scale`` is generated rather than committed, so the
+    generator is the artefact that has to keep working.  Assert the two things
+    the runbook promises: the file count it was asked for, and a chunk count
+    proportional to it (the benchmark sizes its expectations off the latter).
+    """
+    print("\n[H] scale corpus generator")
+    out = TMP / "scale-corpus"
+    p = subprocess.run([PY, str(ROOT / "scripts" / "make_scale_corpus.py"),
+                        "--notes", "60", "--out", str(out)],
+                       capture_output=True, text=True, cwd=str(ROOT), timeout=120)
+    check("H1", "generator writes the requested number of notes", p.returncode == 0
+          and len(list(out.glob("*.md"))) == 60,
+          f"rc={p.returncode} files={len(list(out.glob('*.md')))}")
+
+    if p.returncode != 0:
+        return
+    sample = sorted(out.glob("*.md"))[0].read_text(encoding="utf-8")
+    check("H2", "generated notes carry the synthetic-corpus disclaimer",
+          "合成语料" in sample and "不含任何公司内部信息" in sample)
+
+    # Re-running with a smaller --notes must not leave the previous, larger
+    # run's files behind -- the benchmark would ingest them silently.
+    subprocess.run([PY, str(ROOT / "scripts" / "make_scale_corpus.py"),
+                    "--notes", "20", "--out", str(out)],
+                   capture_output=True, text=True, cwd=str(ROOT), timeout=120)
+    check("H3", "a smaller re-run clears the previous run's notes",
+          len(list(out.glob("*.md"))) == 20,
+          f"files={len(list(out.glob('*.md')))}")
+
+    chunks = 0
+    for f in sorted(out.glob("*.md")):
+        chunks += len(chunk_markdown(f.read_text(encoding="utf-8"), f.name))
+    check("H4", "generated notes chunk (they are not one empty chunk each)",
+          chunks >= 20, f"chunks={chunks}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -492,6 +534,7 @@ def main() -> int:
     tool_cases()
     eval_cases()
     layer_case()
+    scale_corpus_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)

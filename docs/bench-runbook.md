@@ -7,6 +7,10 @@
 [bench-report.md](bench-report.md)；这份手册的重点是 live 那一半——
 本机没有 PostgreSQL，pgvector 侧、真库工具执行、API 嵌入都只能在 VM 上做。
 
+**要测「CPU 与内存差多少」而不是「延迟差多少」，看
+[bench-scale-runbook.md](bench-scale-runbook.md)**：40 片时两个后端的资源差
+被噪声淹没，那份手册把语料放大 100 倍后重测，并且解释了为什么必须这么做。
+
 ---
 
 ## 0. 本机：推代码

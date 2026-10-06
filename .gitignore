@@ -226,3 +226,8 @@ tests/tmp/
 
 # Benchmark run artefacts (regenerable; the report and findings are committed)
 bench/
+
+# Scale corpus for the resource benchmark — generated, not source.  Regenerate
+# with scripts/make_scale_corpus.py; the script is committed, the 2000 files
+# are not.
+examples/knowledge-scale/
