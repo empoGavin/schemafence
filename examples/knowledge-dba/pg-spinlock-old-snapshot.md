@@ -132,7 +132,7 @@ SELECT name, setting, source, pending_restart
 凡是 `source` 不是 `default`、又与业务基线不一致的项，都值得单独问一句
 "谁改的、为什么改、有没有做过性能验证"。
 
-**一句话讲法（面试用）**：
+**复述这件事的最小版本**：
 "那台库的 `old_snapshot_threshold` 被显式设成了 10 分钟，导致页剪枝路径上两个热点抢同一把自旋锁，
 CPU 被烧到 90%；**取消这个显式设置、回到默认的 -1（禁用）之后 CPU 就回落了**。
 用 `pg_settings.source` 就能定位这类参数漂移，不用靠猜。"

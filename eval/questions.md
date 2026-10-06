@@ -26,7 +26,7 @@
 | 15 | 数据量从 104TB 压到 20TB 用了哪些手段？ | data-governance |
 | 16 | 怎么判断数据治理是否真的有效？ | data-governance |
 
-## 待补充（Day 4 你自己加）
+## 待补充（换成你自己的问题）
 
 不想从空白开始：`python agent_cli.py --genq` 会从语料生成 `eval/questions.draft.md`
 （每篇至少 1 题、期望来源自动填好），你做三件事——删掉不会那样问的、改成真实问法、

@@ -1122,4 +1122,4 @@ sudo -u postgres psql -q -d fence_demo -c "ANALYZE;"
 
 ---
 
-*文档版本：2026-10-03 · 适配 Oracle Linux 10.x · schemafence 第 3 天版本 · 主机 VMware Workstation 17.6.2 / Windows / 16GB RAM*
+*文档版本：2026-10-03 · 适配 Oracle Linux 10.x · 主机 VMware Workstation 17.6.2 / Windows / 16GB RAM*

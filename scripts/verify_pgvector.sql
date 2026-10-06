@@ -1,11 +1,11 @@
 -- ============================================================
--- Day 3 · 最小向量检索验证
+-- 最小向量检索验证
 --
 --   sudo -u postgres psql -d fence_demo -f scripts/verify_pgvector.sql
 --
 -- 用 3 维手写向量做验证，是为了不依赖任何 embedding API
--- ——今天要确认的只有一件事：pgvector 能装、能查、索引能建。
--- Day 4 再把 3 维换成 1024 维真实 embedding。
+-- ——这里要确认的只有一件事：pgvector 能装、能查、索引能建。
+-- 换成真实语料时，再把 3 维换成 1024 维 embedding。
 -- ============================================================
 
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -16,7 +16,7 @@ CREATE TABLE demo_vectors (
   label     TEXT NOT NULL,
   embedding vector(3)
 );
-COMMENT ON TABLE demo_vectors IS 'pgvector 语法验证表，Day 4 换成 doc_chunks';
+COMMENT ON TABLE demo_vectors IS 'pgvector 语法验证表，正式语料换成 doc_chunks';
 
 INSERT INTO demo_vectors (label, embedding) VALUES
   ('订单金额',   '[0.90, 0.10, 0.00]'),

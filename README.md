@@ -341,7 +341,7 @@ Check 7 is the reason the project exists. Most migration defects are semantic ra
 syntactic, and no syntax converter will catch them.
 
 Checks 1–4 and the guardrails (6) run today, with or without a database. Check 5 needs a
-live connection and is partly wired up. Check 7 is the 30-day goal.
+live connection and is partly wired up. Check 7 is not built yet.
 
 The whole pipeline, from question to verdict:
 
@@ -429,18 +429,19 @@ A question the agent has to refuse rather than answer:
 
 ## Status
 
-**Early — day 5 of a 7-day build.**
+**Early. The offline path runs end to end; live mode is partly wired up.**
 
 - [x] Project skeleton
 - [x] Offline audit: checks 1–4 plus hygiene, straight from a DDL file
 - [x] Seven-layer guardrail with a 13-case selftest, plus router and tool selftests (no database needed)
 - [x] Live mode: reads the catalogue and `pg_stats` (measured NULL fractions)
 - [x] Setup script for both `apt` and `dnf` families, plus two quickstarts ([Oracle Linux VM](docs/quickstart-oraclelinux-vm.md) · [Cloud Studio](docs/quickstart-cloudstudio.md))
-- [x] Knowledge layer: chunk (heading-aware) → embed → store → retrieve, JSON or pgvector — *day 4*
-- [x] Four tools + hand-written agent loop, rules offline and function calling with a key — *day 5*
-- [x] Retrieval eval harness, tuning grid and a generated [`eval/report-dba.md`](eval/report-dba.md) — *day 4*
-- [x] Agent hardening found by running it live: call memoisation, loop breaker, endpoint degradation, relevance floor, typed schema catalogue — *day 5*
-- [ ] Migration diff (Oracle → PostgreSQL / domestic DB) — *30-day plan*
+- [x] Knowledge layer: chunk (heading-aware) → embed → store → retrieve, JSON or pgvector
+- [x] Four tools + hand-written agent loop, rules offline and function calling with a key
+- [x] Retrieval eval harness, tuning grid and a generated [`eval/report-dba.md`](eval/report-dba.md)
+- [x] Offline QA suite: 72 cases over the guard, router, retrieval and CLI ([`tests/`](tests/))
+- [x] Agent hardening found by running it live: call memoisation, loop breaker, endpoint degradation, relevance floor, typed schema catalogue
+- [ ] Migration diff (Oracle → PostgreSQL / domestic DB)
 
 ## Known limitations
 

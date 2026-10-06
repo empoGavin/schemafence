@@ -9,10 +9,9 @@ Two drivers, one loop:
 
   model-driven any OpenAI-compatible chat endpoint with function calling.
                ``SF_LLM_API_KEY`` switches it on; the loop is hand-written on
-               purpose.  When an interviewer asks "how does the agent decide
-               which tool to call, and what happens when a tool fails?", the
-               answer has to come from code you wrote, not from a framework's
-               docstring.
+               purpose.  The question "how does the agent decide which tool to
+               call, and what happens when a tool fails?" has to be answerable
+               from code in this repository, not from a framework's docstring.
 
 The loop is the same in both cases: pick tools -> run them -> feed the
 results back -> answer, at most ``max_rounds`` times.  Tools go through the

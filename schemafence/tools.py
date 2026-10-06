@@ -13,8 +13,8 @@ call arrives at exactly the same door — and the door is ``guard()``.
 
 Every call is appended to an audit log (``agent_trace.jsonl``) with the
 decision, the layer it was decided at, and how long it took.  That file is
-the raw material for the Day 6 statistics panel and for the interview
-question "how do you know it behaved?".
+what makes "how do you know it behaved?" answerable with records instead of
+recollection.
 """
 
 from __future__ import annotations
