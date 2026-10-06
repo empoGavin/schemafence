@@ -5,8 +5,9 @@ deterministic function of the SQL text, which is the whole point:
 advice lowers the chance of a mistake, a guard lowers its blast radius.
 
   L1  single statement only
-  L2  read-only statement shape (SELECT / WITH / EXPLAIN / TABLE / VALUES)
-  L3  forbidden keywords (DDL + DML)
+  L2  read-only statement shape (SELECT / WITH / EXPLAIN / TABLE / VALUES,
+      no row-locking clause)
+  L3  forbidden keywords (DDL + DML, plus SELECT ... INTO)
   L4  dangerous functions (filesystem, sleep, session control)
   L5  table whitelist (optional, per deployment)
   L6  forced row limit
@@ -29,14 +30,25 @@ from dataclasses import dataclass, field
 ALLOWED_PREFIX = re.compile(r"^(SELECT|WITH|EXPLAIN|TABLE|VALUES)\b", re.IGNORECASE)
 FORBIDDEN_KEYWORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|GRANT|REVOKE|CREATE|COPY|MERGE"
-    r"|CALL|DO|LOCK|VACUUM|REINDEX|CLUSTER|COMMENT|REFRESH|SECURITY|SET|RESET|DISCARD)\b",
+    r"|CALL|DO|LOCK|VACUUM|REINDEX|CLUSTER|COMMENT|REFRESH|SECURITY|SET|RESET|DISCARD"
+    r"|INTO)\b",
     re.IGNORECASE,
 )
 DANGEROUS_FUNCTIONS = re.compile(
     r"\b(pg_sleep|pg_sleep_for|pg_sleep_until|pg_read_file|pg_read_binary_file"
     r"|pg_ls_dir|pg_stat_file|lo_import|lo_export|dblink|pg_terminate_backend"
     r"|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|set_config"
-    r"|pg_advisory_lock|pg_advisory_xact_lock|current_setting)\b",
+    r"|pg_advisory_lock|pg_advisory_xact_lock|current_setting"
+    r"|nextval|setval)\b",
+    re.IGNORECASE,
+)
+# A SELECT can still carry write intent.  `SELECT ... INTO` materialises a
+# table, and a row-locking clause (FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE /
+# FOR KEY SHARE) is rejected outright in a read-only transaction.  Neither
+# starts with a forbidden keyword, so L2 has to recognise the shape.
+WRITE_CLAUSE = re.compile(
+    r"\bFOR\s+(?:NO\s+KEY\s+)?(?:UPDATE|SHARE)\b"
+    r"|\bFOR\s+KEY\s+SHARE\b",
     re.IGNORECASE,
 )
 TABLE_REF = re.compile(
@@ -128,6 +140,10 @@ def guard(sql: str, *, max_rows: int = 100, table_whitelist=None,
     if not ALLOWED_PREFIX.match(clean_body):
         head = clean_body.split()[0].upper() if clean_body.split() else "?"
         return fail("L2", f"only read-only statements are allowed (got {head})")
+
+    hit = WRITE_CLAUSE.search(clean_body)
+    if hit:
+        return fail("L2", f"locking clause is not read-only: {hit.group(0)}")
 
     hit = FORBIDDEN_KEYWORDS.search(clean_body)
     if hit:
