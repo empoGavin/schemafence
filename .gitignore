@@ -220,3 +220,6 @@ __marimo__/
 # schemafence runtime state (rebuild with --ingest)
 .schemafence/
 agent_trace.jsonl
+
+# QA scratch space (stores, traces, generated reports)
+tests/tmp/
