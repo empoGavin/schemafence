@@ -14,6 +14,43 @@
 
 ---
 
+## 0. 完整顺序
+
+从零到报告，一次跑完大致是这些命令；每一段的细节和参数在下面各节。
+
+```bash
+# ---- 环境（只需一次）----
+pip install -r requirements.txt                    # psycopg，只有 live 路径需要
+export DSN_RW='postgresql://postgres:pgvec123@localhost:5432/fence_demo'
+sudo -u postgres psql -d fence_demo -f scripts/setup_rag.sql   # doc_chunks + agent_ro
+
+# ---- 1 向量化：离线网格 → 维度折衷 → 向量模型 ----
+python scripts/bench_embedding.py --mode offline \
+    --chunks 256,512,1024 --overlaps 0,64,128 --idf on,off \
+    --out bench/embedding-offline.json
+python scripts/bench_embedding.py --mode offline --dims 128,256,512,1024 \
+    --chunks 512 --overlaps 64 --idf on --out bench/embedding-dims.json
+python scripts/bench_embedding.py --mode api --dims 1024 \
+    --chunks 512 --overlaps 64 --out bench/embedding-api.json     # 需要 key
+
+# ---- 2 存储对比：两个后端分进程跑 ----
+python scripts/bench_store.py --backend json --repeat 10 --out bench/store-json.json
+python scripts/bench_store.py --backend pg --repeat 10 --db "$DSN_RW" \
+    --reference bench/store-json.json --out bench/store-pg.json
+
+# ---- 3 七层检查与七层护栏 ----
+python scripts/test_layers.py --out bench/layers.json
+python scripts/test_layers.py --suite checks --db "$DSN_RW"      # 补跑库侧的 check 5
+
+# ---- 4 出报告 ----
+python scripts/bench_report.py                     # → docs/bench-report.md
+```
+
+两处容易踩的：`--out` 要给不同文件名（报告按文件名分节，同名互相覆盖）；
+只有第 4 步有依赖，它读 `bench/*.json`，所以别把它排到前面。
+
+---
+
 ## 1. 环境准备
 
 ### 1.1 离线路径（零依赖）
@@ -36,22 +73,33 @@ pip install -r requirements.txt          # 唯一的第三方依赖：psycopg
 sudo -u postgres psql -d fence_demo -f scripts/verify_pgvector.sql
 ```
 
-再建只读账号——这是七层护栏里 L7a 的物理兜底，也是存储基准里应该用的连接身份：
-
-```sql
-CREATE ROLE agent_ro LOGIN PASSWORD 'ro_only';
-GRANT CONNECT ON DATABASE fence_demo TO agent_ro;
-GRANT USAGE  ON SCHEMA public TO agent_ro;
-GRANT USAGE  ON SCHEMA shop   TO agent_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO agent_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA shop   TO agent_ro;
-```
-
-验证只读账号真的写不了（应报 `permission denied`）：
+知识层的表与只读账号由一条幂等脚本一次建完（`doc_chunks` + HNSW 索引 + role `agent_ro`）：
 
 ```bash
-psql "postgresql://agent_ro:ro_only@localhost:5432/fence_demo" \
-     -c "DELETE FROM shop.orders WHERE 1=1"
+sudo -u postgres psql -d fence_demo -f scripts/setup_rag.sql
+```
+
+**两种连接身份，用途不同，不要混用：**
+
+| 连接 | 权限 | 用在哪 |
+|---|---|---|
+| `postgresql://postgres:<pw>@localhost:5432/fence_demo` | 读写 | 存储基准（`ensure_schema()` 要建表、灌库要 INSERT）、`test_layers --db`（要读 `shop` 表的 `pg_stats`） |
+| `postgresql://agent_ro:ro_only@localhost:5432/fence_demo` | 只读 | L7a 的物理兜底验证 |
+
+用 `agent_ro` 跑存储基准会在建表那一步就 `permission denied` —— 它被授予的只有 `doc_chunks` 的 SELECT。
+
+后面的命令统一用变量，避免抄错（`pgvec123` 是 `scripts/setup_pg.sh` 的默认口令）：
+
+```bash
+export DSN_RW='postgresql://postgres:pgvec123@localhost:5432/fence_demo'
+export DSN_RO='postgresql://agent_ro:ro_only@localhost:5432/fence_demo'
+```
+
+只读身份写不进去，这一条要用命令看，不要假设：
+
+```bash
+psql "$DSN_RO" -c "DELETE FROM shop.orders WHERE 1=1"
+# expect: ERROR:  permission denied for table orders
 ```
 
 ### 1.3 向量模型（API 嵌入）
@@ -115,22 +163,26 @@ python scripts/bench_embedding.py --mode both --chunks 512 --overlaps 64
 # JSON：全量向量常驻内存，检索是全表扫描
 python scripts/bench_store.py --backend json --repeat 10
 
-# pgvector：需要库与 DSN；HNSW 与顺序扫描都会被测到
-python scripts/bench_store.py --backend pg --repeat 10 \
-    --db postgresql://agent_ro:ro_only@localhost:5432/fence_demo
+# pgvector：需要库与可写 DSN；HNSW 与顺序扫描都会被测到
+python scripts/bench_store.py --backend pg --repeat 10 --db "$DSN_RW"
 
 # 想看没有索引的代价（建表时不建 HNSW）
-python scripts/bench_store.py --backend pg --db "$DSN" --no-index
+python scripts/bench_store.py --backend pg --db "$DSN_RW" --no-index
 
 # 或者一次跑两个后端（内存差值仍有效，峰值无效）
-python scripts/bench_store.py --backend both --db "$DSN"
+python scripts/bench_store.py --backend both --db "$DSN_RW"
 ```
 
 跑完之后，把两次结果放在一起对比（脚本会报 top-1 一致率与 overlap@k）：
 
 ```bash
-python scripts/bench_store.py --backend pg --db "$DSN" --reference bench/store-json.json
+python scripts/bench_store.py --backend pg --db "$DSN_RW" \
+    --reference bench/store-json.json
 ```
+
+> pg 这一路会**按 source 重灌 `doc_chunks`**（`PgStore.replace()` 先删同 source 的行再插），
+> 用默认语料跑完，库里就是 `chunk 512 / overlap 64` 那一版。要恢复成你自己 ingest 的版本，
+> 跑一次 `python agent_cli.py --ingest examples/knowledge-dba --db "$DSN_RW"`。
 
 输出：`bench/store-<backend>.json`。每个阶段（`ingest_total` / `cold_open` / `search` /
 `search_seqscan`）都记录 wall、CPU、CPU 占 wall 比、RSS 增量与峰值、进程读写字节数。
@@ -148,7 +200,7 @@ python scripts/test_layers.py --suite guard
 python scripts/test_layers.py --suite checks
 
 # 带上数据库，把 check 5（结果合理性，读 pg_stats）也跑掉
-python scripts/test_layers.py --suite checks --db postgresql://agent_ro:ro_only@localhost:5432/fence_demo
+python scripts/test_layers.py --suite checks --db "$DSN_RW"
 
 # 打印库侧那一层需要的 SQL 与 psql 验证命令
 python scripts/test_layers.py --show-env
