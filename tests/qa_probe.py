@@ -323,7 +323,7 @@ def cli_cases() -> None:
 def tool_cases() -> None:
     print("\n[E] tools — selftest, explain, search_path, dispatch")
     rows, ok = run_tool_selftest()
-    check("E0", "run_tool_selftest() 6 cases all pass", ok)
+    check("E0", "run_tool_selftest() 7 cases all pass", ok)
 
     class FakeCur:
         def __init__(self, log):

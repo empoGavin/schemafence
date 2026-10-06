@@ -239,8 +239,18 @@ class Toolbox:
         else:
             try:
                 data = handler(**args)
-                result = ToolResult(name, data.get("ok", True) if isinstance(data, dict) else True,
-                                    data)
+                ok = data.get("ok", True) if isinstance(data, dict) else True
+                result = ToolResult(name, ok, data)
+                # The guard's verdict arrives inside the handler's payload
+                # (`blocked` / `layer`), not on the ToolResult itself.  Leaving
+                # it there meant a blocked write was written to the audit log as
+                # decision="ok" with an empty layer — the trail lost exactly the
+                # field it exists to record — and brief() printed "not run"
+                # instead of naming the layer that stopped it.  Caught by
+                # scripts/test_layers.py cases L7-4 and L7-5.
+                if isinstance(data, dict) and data.get("blocked"):
+                    result.decision = "blocked"
+                    result.layer = data.get("layer") or ""
             except TypeError as exc:
                 result = ToolResult(name, False, {"error": f"bad arguments: {exc}"},
                                     decision="bad-arguments")
@@ -497,5 +507,13 @@ def run_tool_selftest() -> tuple[list[tuple[str, str, bool]], bool]:
         check("get_table_stats / bad args",
               "decision=bad-arguments",
               result.decision == "bad-arguments")
+
+        # A blocked write has to be *reported* as blocked, layer included: this
+        # is what the audit log and the agent loop both read.
+        blocked = box.call("run_sql", {"sql": "DROP TABLE shop.orders"})
+        check("run_sql / blocked call",
+              "decision=blocked, layer=L2",
+              (not blocked.ok) and blocked.decision == "blocked"
+              and blocked.layer == "L2")
 
     return rows, all(passed for _, _, passed in rows)
