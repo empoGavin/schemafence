@@ -1,6 +1,6 @@
 # schemafence 基准测试报告 · 2026-10-06
 
-- 环境：Windows 10 · python 3.13.14 · 8 逻辑核
+- 环境：Linux 6.12.0-206.104.4.4.el10uek.x86_64 · python 3.12.13 · 2 逻辑核
 - 进程计数器：RSS 可用 · I/O 可用
 - 生成方式：`python scripts/bench_report.py`（数据来自 bench/*.json，本文件不要手改）
 
@@ -26,30 +26,38 @@
 
 ## 2. 向量化基准
 
+### `embedding-api.json`（examples/knowledge-dba）
+
+题库 44 题，每配置查询重复 3 次。
+
+| embedder | dim | chunk | overlap | idf | pieces | avg tok | embed ms | ms/piece | pieces/s | store | B/piece | hit@5 | MRR@5 | mean rank@5 | q p50 ms | q p95 ms | peak RSS MB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| api | 1024 | 512 | 64 | off | 40 | 298.1 | 19998 | 499.95 | 2 | 942.1 KB | 24117 | 100.0% | 0.928 | 1.159 | 666.34 | 5536.25 | 35.82 |
+
 ### `embedding-offline.json`（examples/knowledge-dba）
 
 题库 44 题，每配置查询重复 3 次。
 
 | embedder | dim | chunk | overlap | idf | pieces | avg tok | embed ms | ms/piece | pieces/s | store | B/piece | hit@5 | MRR@5 | mean rank@5 | q p50 ms | q p95 ms | peak RSS MB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| offline | 1024 | 256 | 0 | on | 61 | 194.7 | 26 | 0.42 | 2359 | 487.4 KB | 8182 | 97.7% | 0.894 | 1.186 | 4.06 | 4.26 | 44.8 |
-| offline | 1024 | 256 | 0 | off | 61 | 194.7 | 23 | 0.38 | 2613 | 485.2 KB | 8144 | 97.7% | 0.901 | 1.186 | 3.94 | 4.34 | 45.16 |
-| offline | 1024 | 256 | 64 | on | 64 | 198.0 | 26 | 0.41 | 2433 | 515.3 KB | 8245 | 97.7% | 0.883 | 1.209 | 4.25 | 4.59 | 45.29 |
-| offline | 1024 | 256 | 64 | off | 64 | 198.0 | 25 | 0.39 | 2550 | 512.1 KB | 8193 | 97.7% | 0.913 | 1.163 | 4.19 | 4.89 | 45.18 |
-| offline | 1024 | 256 | 128 | on | 70 | 191.5 | 28 | 0.41 | 2470 | 557.2 KB | 8151 | 97.7% | 0.905 | 1.163 | 4.62 | 4.96 | 45.5 |
-| offline | 1024 | 256 | 128 | off | 70 | 191.5 | 26 | 0.37 | 2694 | 553.9 KB | 8103 | 97.7% | 0.924 | 1.14 | 5.28 | 5.48 | 45.55 |
-| offline | 1024 | 512 | 0 | on | 40 | 296.6 | 24 | 0.61 | 1646 | 371.9 KB | 9520 | 97.7% | 0.893 | 1.279 | 2.70 | 3.15 | 45.47 |
-| offline | 1024 | 512 | 0 | off | 40 | 296.6 | 20 | 0.50 | 2015 | 369.6 KB | 9461 | 97.7% | 0.898 | 1.233 | 2.71 | 2.88 | 45.56 |
-| offline | 1024 | 512 | 64 | on | 40 | 298.1 | 26 | 0.64 | 1568 | 372.1 KB | 9527 | 97.7% | 0.894 | 1.256 | 3.10 | 3.37 | 45.55 |
-| offline | 1024 | 512 | 64 | off | 40 | 298.1 | 31 | 0.78 | 1276 | 370.2 KB | 9477 | 97.7% | 0.898 | 1.233 | 3.24 | 3.71 | 45.45 |
-| offline | 1024 | 512 | 128 | on | 41 | 292.1 | 29 | 0.71 | 1404 | 378.5 KB | 9452 | 97.7% | 0.883 | 1.279 | 3.50 | 5.67 | 45.7 |
-| offline | 1024 | 512 | 128 | off | 41 | 292.1 | 29 | 0.70 | 1425 | 376.4 KB | 9400 | 97.7% | 0.887 | 1.256 | 3.49 | 6.30 | 45.64 |
-| offline | 1024 | 1024 | 0 | on | 24 | 493.8 | 27 | 1.14 | 877 | 273.9 KB | 11687 | 95.5% | 0.898 | 1.119 | 2.05 | 4.74 | 45.81 |
-| offline | 1024 | 1024 | 0 | off | 24 | 493.8 | 32 | 1.33 | 753 | 271.6 KB | 11586 | 95.5% | 0.932 | 1.048 | 2.13 | 4.19 | 45.48 |
-| offline | 1024 | 1024 | 64 | on | 24 | 496.3 | 26 | 1.09 | 915 | 274.8 KB | 11725 | 95.5% | 0.909 | 1.095 | 2.46 | 3.05 | 46.04 |
-| offline | 1024 | 1024 | 64 | off | 24 | 496.3 | 24 | 0.99 | 1008 | 272.1 KB | 11609 | 95.5% | 0.943 | 1.024 | 2.18 | 3.42 | 45.8 |
-| offline | 1024 | 1024 | 128 | on | 24 | 498.5 | 28 | 1.16 | 863 | 275.5 KB | 11754 | 95.5% | 0.898 | 1.119 | 2.09 | 3.71 | 45.78 |
-| offline | 1024 | 1024 | 128 | off | 24 | 498.5 | 24 | 1.00 | 995 | 272.9 KB | 11644 | 95.5% | 0.943 | 1.024 | 2.27 | 3.63 | 45.62 |
+| offline | 1024 | 256 | 0 | on | 61 | 194.7 | 30 | 0.49 | 2020 | 487.4 KB | 8182 | 97.7% | 0.894 | 1.186 | 3.63 | 4.13 | 34.08 |
+| offline | 1024 | 256 | 0 | off | 61 | 194.7 | 27 | 0.44 | 2261 | 485.2 KB | 8144 | 97.7% | 0.901 | 1.186 | 3.52 | 4.21 | 35.44 |
+| offline | 1024 | 256 | 64 | on | 64 | 198.0 | 31 | 0.48 | 2078 | 515.3 KB | 8245 | 97.7% | 0.883 | 1.209 | 3.46 | 4.12 | 35.71 |
+| offline | 1024 | 256 | 64 | off | 64 | 198.0 | 24 | 0.37 | 2719 | 512.1 KB | 8193 | 97.7% | 0.913 | 1.163 | 3.98 | 4.42 | 35.95 |
+| offline | 1024 | 256 | 128 | on | 70 | 191.5 | 28 | 0.40 | 2475 | 557.2 KB | 8151 | 97.7% | 0.905 | 1.163 | 4.08 | 5.09 | 36.05 |
+| offline | 1024 | 256 | 128 | off | 70 | 191.5 | 29 | 0.41 | 2428 | 553.9 KB | 8103 | 97.7% | 0.924 | 1.14 | 4.01 | 4.64 | 36.7 |
+| offline | 1024 | 512 | 0 | on | 40 | 296.6 | 22 | 0.55 | 1828 | 371.9 KB | 9520 | 97.7% | 0.893 | 1.279 | 2.28 | 3.07 | 36.7 |
+| offline | 1024 | 512 | 0 | off | 40 | 296.6 | 20 | 0.51 | 1962 | 369.6 KB | 9461 | 97.7% | 0.898 | 1.233 | 2.52 | 2.74 | 36.7 |
+| offline | 1024 | 512 | 64 | on | 40 | 298.1 | 21 | 0.52 | 1927 | 372.1 KB | 9527 | 97.7% | 0.894 | 1.256 | 2.25 | 2.58 | 36.7 |
+| offline | 1024 | 512 | 64 | off | 40 | 298.1 | 20 | 0.51 | 1964 | 370.2 KB | 9477 | 97.7% | 0.898 | 1.233 | 2.51 | 2.70 | 36.7 |
+| offline | 1024 | 512 | 128 | on | 41 | 292.1 | 26 | 0.63 | 1583 | 378.5 KB | 9452 | 97.7% | 0.883 | 1.279 | 2.52 | 2.73 | 36.7 |
+| offline | 1024 | 512 | 128 | off | 41 | 292.1 | 20 | 0.48 | 2100 | 376.4 KB | 9400 | 97.7% | 0.887 | 1.256 | 2.49 | 3.09 | 36.7 |
+| offline | 1024 | 1024 | 0 | on | 24 | 493.8 | 19 | 0.77 | 1296 | 273.9 KB | 11687 | 95.5% | 0.898 | 1.119 | 1.42 | 1.96 | 36.7 |
+| offline | 1024 | 1024 | 0 | off | 24 | 493.8 | 18 | 0.75 | 1332 | 271.6 KB | 11586 | 95.5% | 0.932 | 1.048 | 1.52 | 1.68 | 36.7 |
+| offline | 1024 | 1024 | 64 | on | 24 | 496.3 | 20 | 0.81 | 1228 | 274.8 KB | 11725 | 95.5% | 0.909 | 1.095 | 1.64 | 1.75 | 36.7 |
+| offline | 1024 | 1024 | 64 | off | 24 | 496.3 | 18 | 0.75 | 1339 | 272.1 KB | 11609 | 95.5% | 0.943 | 1.024 | 1.65 | 1.78 | 36.7 |
+| offline | 1024 | 1024 | 128 | on | 24 | 498.5 | 22 | 0.92 | 1087 | 275.5 KB | 11754 | 95.5% | 0.898 | 1.119 | 1.51 | 1.68 | 36.7 |
+| offline | 1024 | 1024 | 128 | off | 24 | 498.5 | 18 | 0.74 | 1349 | 272.9 KB | 11644 | 95.5% | 0.943 | 1.024 | 1.47 | 1.62 | 36.7 |
 
 失效样本（chunk=256, overlap=0, idf=on）：
 - 磁盘还有一半空间，为什么还要提前扩容？ → 期望 `pg-capacity-planning`，实际 `pg-spinlock-old-snapshot`, `pg-index-not-used`, `pg-upgrade`
@@ -117,10 +125,10 @@
 
 | embedder | dim | chunk | overlap | idf | pieces | avg tok | embed ms | ms/piece | pieces/s | store | B/piece | hit@5 | MRR@5 | mean rank@5 | q p50 ms | q p95 ms | peak RSS MB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| offline | 128 | 512 | 64 | on | 40 | 298.1 | 19 | 0.47 | 2136 | 140.5 KB | 3596 | 81.8% | 0.547 | 2.167 | 0.44 | 0.48 | 43.12 |
-| offline | 256 | 512 | 64 | on | 40 | 298.1 | 19 | 0.47 | 2138 | 190.9 KB | 4888 | 88.6% | 0.637 | 1.846 | 0.81 | 0.91 | 44.16 |
-| offline | 512 | 512 | 64 | on | 40 | 298.1 | 21 | 0.53 | 1898 | 260.2 KB | 6660 | 95.5% | 0.764 | 1.69 | 1.37 | 1.68 | 43.88 |
-| offline | 1024 | 512 | 64 | on | 40 | 298.1 | 22 | 0.56 | 1785 | 372.1 KB | 9527 | 97.7% | 0.894 | 1.256 | 2.75 | 3.11 | 44.95 |
+| offline | 128 | 512 | 64 | on | 40 | 298.1 | 19 | 0.48 | 2071 | 140.5 KB | 3596 | 81.8% | 0.547 | 2.167 | 0.39 | 0.47 | 31.71 |
+| offline | 256 | 512 | 64 | on | 40 | 298.1 | 20 | 0.49 | 2051 | 190.9 KB | 4888 | 88.6% | 0.637 | 1.846 | 0.67 | 0.78 | 32.2 |
+| offline | 512 | 512 | 64 | on | 40 | 298.1 | 30 | 0.74 | 1348 | 260.2 KB | 6660 | 95.5% | 0.764 | 1.69 | 1.28 | 1.55 | 32.34 |
+| offline | 1024 | 512 | 64 | on | 40 | 298.1 | 23 | 0.59 | 1705 | 372.1 KB | 9527 | 97.7% | 0.894 | 1.256 | 2.39 | 2.71 | 33.29 |
 
 失效样本（chunk=512, overlap=64, idf=on）：
 - max_connections 调大一点是不是更好？ → 期望 `pg-connection-pool`，实际 `pg-subtransaction-overflow`, `pg-index-not-used`, `pg-slow-query-method`
@@ -154,7 +162,7 @@
 
 | backend | pieces | ingest ms | open ms | on disk | peak RSS MB | p50 ms | p95 ms | max ms | p50 seqscan ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| json | 40 | 105 | 20.4 | 372.1 KB | 44.07 | 2.645 | 3.268 | 6.164 |  |
+| json | 40 | 79 | 10.6 | 372.1 KB | 34.48 | 2.137 | 2.488 | 3.409 |  |
 
 插入方式决定了两者的差距：JSON 写一个文件（372.1 KB），pgvector 在 autocommit 连接上逐行 INSERT。下表是这两种做法的CPU 与 I/O 代价。
 
@@ -162,72 +170,33 @@
 
 | phase | wall ms | cpu ms | cpu % of wall | RSS delta MB | RSS peak MB | read bytes | write bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| ingest_total | 105.4 | 109.375 | 103.8 | 1.81 | 44.07 | 56012 | 386748 |
-| cold_open | 20.4 | 15.625 | 76.6 | 1.65 | 45.72 | 381494 | 328 |
-| search | 1332.1 | 1328.125 | 99.7 | 0.0 | 47.47 | 0 | 0 |
+| ingest_total | 79.4 | 78.116 | 98.3 | 2.57 | 34.48 | 0 | 385024 |
+| cold_open | 10.6 | 10.462 | 98.8 | 1.55 | 36.27 | 0 | 0 |
+| search | 1049.0 | 1034.53 | 98.6 | 0.02 | 36.75 | 0 | 0 |
 
-- `pg` 未测：`python scripts/bench_store.py --backend pg --repeat 10 --db postgresql://agent_ro:ro_only@localhost:5432/fence_demo`
+### `store-pg.json`
 
-pgvector 那一半需要运行中的 PostgreSQL（`--db`）与 `psycopg`；本机环境没有，故本节只有 JSON 侧的数字，不做推测。
+嵌入方式 `offline / hashed-lexical / 1024d`，top-k 5，每题重复 10 次，HNSW 启用
+
+| backend | pieces | ingest ms | open ms | on disk | peak RSS MB | p50 ms | p95 ms | max ms | p50 seqscan ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pg | 40 | 205 | 14.7 | 1.4 MB | 49.93 | 0.757 | 1.222 | 10.569 | 1.091 |
+
+**pg 各阶段资源**（同一进程内测量）
+
+| phase | wall ms | cpu ms | cpu % of wall | RSS delta MB | RSS peak MB | read bytes | write bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ingest_total | 204.5 | 85.893 | 42.0 | 2.59 | 49.93 | 0 | 0 |
+| cold_open | 14.7 | 9.99 | 67.9 | 0.01 | 49.94 | 0 | 0 |
+| search | 401.8 | 174.417 | 43.4 | 0.13 | 51.81 | 0 | 0 |
+| search_seqscan | 564.9 | 249.713 | 44.2 | 0.02 | 51.89 | 0 | 0 |
+
 
 ## 4. 七层检查与七层护栏
 
-### 运行时七层护栏 (guard.py)
-
-44/44 passed
-
-| case | layer | what it asserts | result |
-| --- | --- | --- | :-: |
-| L1-1 | L1 | empty statement is refused | PASS |
-| L1-2 | L1 | whitespace only is refused | PASS |
-| L1-3 | L1 | comment-only input is refused | PASS |
-| L1-4 | L1 | two statements in one call are refused | PASS |
-| L1-5 | L1 | one statement with a trailing semicolon passes | PASS |
-| L2-1 | L2 | DROP never starts a read-only statement | PASS |
-| L2-2 | L2 | UPDATE never starts a read-only statement | PASS |
-| L2-3 | L2 | SELECT … FOR UPDATE is a locking read | PASS |
-| L2-4 | L2 | SELECT … FOR NO KEY UPDATE is a locking read | PASS |
-| L2-5 | L2 | SELECT … FOR SHARE is a locking read | PASS |
-| L2-6 | L2 | SELECT … FOR KEY SHARE is a locking read | PASS |
-| L2-7 | L2 | WITH … SELECT is read-only | PASS |
-| L2-8 | L2 | TABLE is shorthand for SELECT * | PASS |
-| L2-9 | L2 | VALUES is a read-only statement | PASS |
-| L2-10 | L2 | EXPLAIN is read-only | PASS |
-| L3-1 | L3 | UPDATE hidden in a CTE is caught | PASS |
-| L3-2 | L3 | DELETE hidden in a CTE is caught | PASS |
-| L3-3 | L3 | SELECT … INTO materialises a table | PASS |
-| L3-4 | L3 | CREATE hidden in a CTE is caught | PASS |
-| L3-5 | L3 | TRUNCATE inside a comment is not a statement | PASS |
-| L3-6 | L3 | a banned word inside a string literal is data | PASS |
-| L4-1 | L4 | pg_sleep is refused | PASS |
-| L4-2 | L4 | pg_read_file is refused | PASS |
-| L4-3 | L4 | nextval is a write to a sequence | PASS |
-| L4-4 | L4 | pg_terminate_backend is refused | PASS |
-| L4-5 | L4 | set_config can change session behaviour | PASS |
-| L4-6 | L4 | pg_advisory_lock takes a global lock | PASS |
-| L4-7 | L4 | current_setting is refused too (conservative) | PASS |
-| L4-8 | L4 | a harmless pg_ function passes | PASS |
-| L5-1 | L5 | whitelisted table passes | PASS |
-| L5-2 | L5 | table outside the whitelist is refused | PASS |
-| L5-3 | L5 | an unqualified table is resolved to the whitelist too | PASS |
-| L5-4 | L5 | a JOIN cannot smuggle a second table in | PASS |
-| L5-5 | L5 | no whitelist = the layer is off | PASS |
-| L6-1 | L6 | a missing LIMIT is added | PASS |
-| L6-2 | L6 | the limit follows --max-rows | PASS |
-| L6-3 | L6 | an explicit LIMIT is left alone | PASS |
-| L6-4 | L6 | 'limit 3' inside a literal is not a LIMIT | PASS |
-| L6-5 | L6 | lowercase limit is recognised | PASS |
-| L7-1 | L7 | session hardening statements are returned for the caller | PASS |
-| L7-2 | L7 | a blocked decision carries an audit record | PASS |
-| L7-3 | L7 | an allowed decision records tables and rewriting | PASS |
-| L7-4 | L7 | every tool call lands in agent_trace.jsonl | PASS |
-| L7-5 | L7 | the tools share the guard's door | PASS |
-
-> `L4-7` is a deliberate false positive: current_setting is refused too (conservative) — `SELECT current_setting('search_path')` is read-only, but the layer refuses it rather than allow a function that can also change a session. Change it only if you need session introspection more than you need the ban.
-
 ### 静态七层检查 (checks.py)
 
-17/17 passed, 1 skipped (needs --db)
+18/18 passed
 
 | case | layer | what it asserts | result |
 | --- | --- | --- | :-: |
@@ -248,7 +217,7 @@ pgvector 那一半需要运行中的 PostgreSQL（`--db`）与 `psycopg`；本�
 | H-3 | check H | two spellings for the same idea | PASS |
 | H-4 | check H | described table with one time convention | PASS |
 | C5-1 | check 5 | check 5 is not faked from a DDL file | PASS |
-| C5-2 | check 5 | check 5 reads pg_stats on a live database | SKIP |
+| C5-2 | check 5 | check 5 reads pg_stats on a live database | PASS |
 
 ### 需要数据库的环境准备
 
