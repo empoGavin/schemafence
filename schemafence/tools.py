@@ -256,7 +256,11 @@ class Toolbox:
     def search_docs(self, query: str, k: int = 5) -> dict:
         if self.store is None:
             return {"ok": False, "error": "knowledge store not loaded — run --ingest first"}
-        k = max(1, min(int(k or 5), 20))
+        # k=0 must clamp up to the documented minimum of 1, not fall back to
+        # the default: `int(k or 5)` treats 0 as "missing" and returns five
+        # passages, so the max(1, ...) below never fired for the one value a
+        # caller would use to mean "one".
+        k = 5 if k is None else max(1, min(int(k), 20))
         embedder = getattr(self.store, "embedder", None)
         try:
             if embedder is not None:
