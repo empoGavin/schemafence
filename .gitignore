@@ -223,3 +223,6 @@ agent_trace.jsonl
 
 # QA scratch space (stores, traces, generated reports)
 tests/tmp/
+
+# Benchmark run artefacts (regenerable; the report and findings are committed)
+bench/
