@@ -70,12 +70,13 @@ mode   : offline (no database, no model, no API key)
   ok   explain_sql / no database          ok=False, says so
   ok   get_table_stats / no database      ok=False, says so
   ok   get_table_stats / bad args         decision=bad-arguments
+  ok   run_sql / blocked call             decision=blocked, layer=L2
 
   these cases exist because of a bug the other tests missed: the
   relevance floor asked whether an embedder was attached, and the CLI
   attaches one even offline, so an API-grade floor of 0.45 filtered
   out every lexical hit (their scores run 0.089-0.285).
-  6 cases → all passed
+  7 cases → all passed
 ```
 
 The `[tools]` block was added after a bug the other tests could not see. The relevance  
@@ -441,7 +442,7 @@ A question the agent has to refuse rather than answer:
 - [x] Knowledge layer: chunk (heading-aware) → embed → store → retrieve, JSON or pgvector
 - [x] Four tools + hand-written agent loop, rules offline and function calling with a key
 - [x] Retrieval eval harness, tuning grid and a generated [`eval/report-dba.md`](eval/report-dba.md)
-- [x] Offline QA suite: 72 cases over the guard, router, retrieval and CLI ([`tests/`](tests/))
+- [x] Offline QA suite: 75 cases over the guard, router, retrieval and CLI ([`tests/`](tests/))
 - [x] Agent hardening found by running it live: call memoisation, loop breaker, endpoint degradation, relevance floor, typed schema catalogue
 - [ ] Migration diff (Oracle → PostgreSQL / domestic DB)
 

@@ -119,6 +119,38 @@ curl -s "$SF_EMBED_BASE_URL/embeddings" \
   -d "{\"model\":\"$SF_EMBED_MODEL\",\"input\":[\"hi\"]}" | head -c 300
 ```
 
+### 1.4 灌库语义与 `--rebuild`
+
+`PgStore.replace()` 做的是「删掉这批语料提到的 source，再插新的」，不是清空重来。
+所以同一个目录重跑、或者只改 `--chunk/--overlap` 重跑，都是幂等的。但**换了语料目录**时，
+上一批笔记的文件名不在新语料里，`DELETE ... WHERE source = ANY(...)` 一行都删不掉，
+它们会留在表里继续被检索——而且不报错。
+
+所以 ingest 结束时会自己检查一次，有残留就打印：
+
+```
+  orphan rows : 8 source(s) held but not in this corpus: data-governance.md, … 
+  what now    : keep them if a second corpus lives here; otherwise re-run with --rebuild
+```
+
+看到这行，三种处置：
+
+```bash
+# 1. 这个库只放一套语料 —— 清空再灌
+python agent_cli.py --ingest examples/knowledge-dba --db "$DSN_RW" --rebuild
+
+# 2. 两套语料有意共存 —— 忽略警告即可（JSON 后台不会有这行：
+#    JsonStore.replace 是整体替换，天然没有孤儿）
+
+# 3. 事后手工处理
+psql "$DSN_RW" -c "SELECT source, count(*) FROM doc_chunks GROUP BY 1 ORDER BY 1"
+psql "$DSN_RW" -c "TRUNCATE doc_chunks"                     # 全清
+psql "$DSN_RW" -c "DELETE FROM doc_chunks WHERE source <> ALL(ARRAY['a.md','b.md'])"
+```
+
+只用 `DELETE` 的话补一句 `VACUUM (ANALYZE) doc_chunks`：反复重灌会累积死元组，
+这正是语料里 `pg-bloat-seq-scan.md` 那一篇讲的事。
+
 ---
 
 ## 2. 向量化基准
@@ -180,9 +212,9 @@ python scripts/bench_store.py --backend pg --db "$DSN_RW" \
     --reference bench/store-json.json
 ```
 
-> pg 这一路会**按 source 重灌 `doc_chunks`**（`PgStore.replace()` 先删同 source 的行再插），
-> 用默认语料跑完，库里就是 `chunk 512 / overlap 64` 那一版。要恢复成你自己 ingest 的版本，
-> 跑一次 `python agent_cli.py --ingest examples/knowledge-dba --db "$DSN_RW"`。
+> pg 这一路会**按 source 重灌 `doc_chunks`**（见 §1.4），用默认语料跑完，库里就是
+> `chunk 512 / overlap 64` 那一版。要恢复成你自己 ingest 的版本：
+> `python agent_cli.py --ingest examples/knowledge-dba --db "$DSN_RW" --rebuild`。
 
 输出：`bench/store-<backend>.json`。每个阶段（`ingest_total` / `cold_open` / `search` /
 `search_seqscan`）都记录 wall、CPU、CPU 占 wall 比、RSS 增量与峰值、进程读写字节数。

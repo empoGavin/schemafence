@@ -13,11 +13,13 @@
 |---|---|---|---|
 | A. guard 闸门 | 25 | 4（A21–A24） | 25 PASS |
 | B. 路由 | 8 | 0 | 8 PASS |
-| C. 知识检索 | 10 | 1（C7） | 10 PASS |
-| D. CLI 行为 | 18 | 4（D14–D17） | 18 PASS |
+| C. 知识检索 | 12 | 1（C7） | 12 PASS |
+| D. CLI 行为 | 19 | 4（D14–D17） | 19 PASS |
 | E. 工具层 | 9 | 0（E8 首跑为用例自身缺陷） | 9 PASS |
 | F. 评测基线 | 2 | 0 | 2 PASS |
-| **合计** | **72** | **9** | **72 PASS** |
+| **合计** | **75** | **9** | **75 PASS** |
+
+C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -82,6 +84,8 @@
 | C8 | 标题内联切片 | 无 | `chunk_markdown("# 判定指南\n\n## 治理标准\n死元组占比...")` | 至少一片 content 含标题词「治理标准」 | 命中 | PASS |
 | C9 | 空 store 降级 | `JsonStore` 无 chunk | `Toolbox(empty_store).search_docs("x", k=3)` | `ok=True`，hits 空，note 提示语料无匹配 | 空 hits + note | PASS |
 | C10 | 无 store 降级 | `store=None` | `Toolbox(store=None).search_docs("x")` | `ok=False`，error 含 "not loaded"，不抛异常 | `knowledge store not loaded — run --ingest first` | PASS |
+| C11 | 孤儿 source 判定 | 手工构造含 `a.md`/`b.md` 的 store | `orphan_sources(store, [只有 a.md 的 chunks])` | 返回 `['b.md']`（库里有、本次语料没有的） | `['b.md']` | PASS |
+| C12 | 孤儿判定不误报 | 同上 | `orphan_sources(store, 全部 chunks)` | 返回 `[]` | `[]` | PASS |
 
 ## D. CLI 行为（ingest / ask / eval / report / 坏参数）
 
@@ -107,12 +111,13 @@
 | D16 | api 无 key | 未设 `SF_EMBED_API_KEY` | `--mode api` | 退出非 0、无栈回溯、提示 `SF_EMBED_API_KEY` | 首跑 traceback（FAIL）→ 修复后 `rc=2` | PASS |
 | D17 | report 坏语料目录 | 无 | `--report ... --corpus tests/tmp/no-such-dir` | 退出非 0、无栈回溯 | 首跑 traceback（FAIL）→ 修复后 `rc=2` | PASS |
 | D18 | 多次 --ask | 已 ingest | `--ask "表膨胀怎么处理？" --ask "帮我删掉 orders 表"` | 两题都处理（`[ask]` 出现 2 次） | 命中 | PASS |
+| D19 | `--rebuild` 在 JSON 后台 | 已 ingest | `--ingest ... --rebuild` | 退出 0，打印 "nothing to empty"（JSON 整体替换，无需清表） | `rc=0` + "nothing to empty — this backend is replaced whole" | PASS |
 
 ## E. 工具层（selftest / explain 参数化 / search_path）
 
 | 编号 | 维度 | 前置条件 | 步骤 | 预期结果 | 实际结果 | 结果 |
 |---|---|---|---|---|---|---|
-| E0 | 工具回归 | 无 | `run_tool_selftest()` | 6 例全 PASS | `6 cases → all passed` | PASS |
+| E0 | 工具回归 | 无 | `run_tool_selftest()` | 7 例全 PASS | `7 cases → all passed` | PASS |
 | E1 | explain 参数化 | 无 | mock 连接下 `explain_sql("SELECT 1")` | 执行串以 `EXPLAIN (COSTS ON, VERBOSE OFF)` 开头 | `EXPLAIN (COSTS ON, VERBOSE OFF) \| SELECT 1 \| LIMIT 100` | PASS |
 | E2 | explain 过 guard | 无 | mock 连接下 `explain_sql("DROP TABLE t")` | `ok=False`，`layer=L3` | `forbidden keyword: DROP` | PASS |
 | E3 | search_path 补 public | 无 | `Toolbox(search_path="shop")` 执行查询 | 执行 `SET search_path TO shop, public` | 命中 | PASS |
@@ -136,7 +141,7 @@
 | 相关度地板按 `embedder.mode` 判模式 | 成立。`tools.py` 用 `mode = getattr(embedder, "mode", "offline")`；离线 = 0.0、api = 0.45（C2/C3 验证）。 |
 | 不要用 `--eval --report` 覆盖 `eval/report-dba.md` | 遵守。本次报告生成一律输出到 `tests/tmp/`（D6）。 |
 | 路由：写词命中 ≠ 写意图 | 成立（B1–B5，demo.py [router] 10 例全绿）。 |
-| demo.py 三块自检为回归门禁 | 成立，修复后 `python demo.py` 退出 0，13/10/6 全绿。 |
+| demo.py 三块自检为回归门禁 | 成立，修复后 `python demo.py` 退出 0，13/10/7 全绿。 |
 | 多来源标注 `甲 / 乙` 命中任一即算命中 | 成立。`_gold_sources()` 按 `/` 拆分；第 9 题 `pg-vacuum-tuning / pg-bloat-seq-scan` 在 rank 4 命中计为 hit（D5 汇总内）。 |
 | 「最近的提交 874d7bd、12b9b98、8e36a49 本地未 push」 | **与代码实际不符**：`git branch -vv` 显示 `main` 跟踪 `origin/main` 且 "up to date"；`git log` 顶部为 `8e36a49`。这三条实际已同步到 `origin/main`，并非未 push。未据此改代码。 |
 | 语料规模：knowledge 8 篇 / dba 14 篇 | 成立（ingest 报告 8 篇、14 篇）。 |
