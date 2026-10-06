@@ -442,7 +442,7 @@ A question the agent has to refuse rather than answer:
 - [x] Knowledge layer: chunk (heading-aware) → embed → store → retrieve, JSON or pgvector
 - [x] Four tools + hand-written agent loop, rules offline and function calling with a key
 - [x] Retrieval eval harness, tuning grid and a generated [`eval/report-dba.md`](eval/report-dba.md)
-- [x] Offline QA suite: 75 cases over the guard, router, retrieval and CLI ([`tests/`](tests/))
+- [x] Offline QA suite: 80 cases over the guard, router, retrieval, CLI and the layer artefact ([`tests/`](tests/))
 - [x] Agent hardening found by running it live: call memoisation, loop breaker, endpoint degradation, relevance floor, typed schema catalogue
 - [ ] Migration diff (Oracle → PostgreSQL / domestic DB)
 

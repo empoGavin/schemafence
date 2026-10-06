@@ -11,6 +11,7 @@ Temporary stores and outputs land under ``tests/tmp/`` (gitignored).
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -434,6 +435,54 @@ def eval_cases() -> None:
           p.returncode == 0 and "hit rate    : 100.0%" in p.stdout)
 
 
+# --------------------------------------------------------------------------- #
+# G. artefact integrity — the layer suites as two commands over one path
+# --------------------------------------------------------------------------- #
+def layer_case() -> None:
+    """The bug class this guards against: the terminal is right, the file is not.
+
+    ``--suite guard`` needs no database and ``--suite checks`` does, so the run
+    is two commands; both default to the same ``--out``.  The second used to
+    replace the first, and nothing anywhere failed.  Run both, then read the
+    file and assert the totals describe the file rather than the last command.
+    """
+    print("\n[G] layer artefact — two commands, one output path")
+    out = TMP / "layers-split.json"
+    if out.exists():
+        out.unlink()
+
+    first = subprocess.run([PY, str(ROOT / "scripts" / "test_layers.py"),
+                            "--suite", "guard", "--out", str(out)],
+                           capture_output=True, text=True, cwd=str(ROOT), timeout=120)
+    check("G1", "--suite guard alone exits 0", first.returncode == 0,
+          f"rc={first.returncode}")
+
+    second = subprocess.run([PY, str(ROOT / "scripts" / "test_layers.py"),
+                             "--suite", "checks", "--out", str(out)],
+                            capture_output=True, text=True, cwd=str(ROOT), timeout=120)
+    check("G2", "--suite checks over the same path exits 0", second.returncode == 0,
+          f"rc={second.returncode}")
+
+    if not out.exists():
+        check("G3", "the second run does not delete the first suite's rows", False,
+              "no file written")
+        return
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    suites = payload.get("suites") or {}
+    guard_rows = suites.get("guard") or []
+    checks_rows = suites.get("checks") or []
+
+    check("G3", "the second run does not delete the first suite's rows",
+          len(guard_rows) == 44, f"guard rows={len(guard_rows)}")
+    check("G4", "the second suite's own rows are present too",
+          len(checks_rows) == 18, f"checks rows={len(checks_rows)}")
+
+    on_disk = len(guard_rows) + len(checks_rows)
+    check("G5", "total matches the rows actually in the file",
+          payload.get("total") == on_disk,
+          f"total={payload.get('total')} rows={on_disk}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -442,6 +491,7 @@ def main() -> int:
     cli_cases()
     tool_cases()
     eval_cases()
+    layer_case()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)

@@ -17,7 +17,8 @@
 | D. CLI 行为 | 19 | 4（D14–D17） | 19 PASS |
 | E. 工具层 | 9 | 0（E8 首跑为用例自身缺陷） | 9 PASS |
 | F. 评测基线 | 2 | 0 | 2 PASS |
-| **合计** | **75** | **9** | **75 PASS** |
+| G. 产物完整性 | 5 | 1（G5，总数字段未回填） | 5 PASS |
+| **合计** | **80** | **10** | **80 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 
@@ -133,6 +134,23 @@ C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起�
 |---|---|---|---|---|---|---|
 | F1 | DBA 基线 | 已 ingest knowledge-dba | `--eval --eval-file eval/questions-dba.md` | 命中 ≥ 43/44（97.7%） | 43/44 = 97.7%，仅 1 题 MISS（`磁盘还有一半空间，为什么还要提前扩容？`） | PASS |
 | F2 | knowledge 基线 | 已 ingest examples/knowledge | `--eval`（16 题） | 100% | 16/16 = 100.0% | PASS |
+
+## G. 产物完整性（七层套件分两条命令写同一路径）
+
+复现的是「终端全绿、留下的文件残缺」这类缺陷：`--suite guard` 不需要库、`--suite checks --db` 需要，
+所以天然是两条命令，而两条命令默认共用 `bench/layers.json`。第二条曾把第一条覆盖掉，且**没有任何地方报错**。
+本组用 `tests/tmp/layers-split.json` 复现两步序列，再读文件断言「文件里的行数」与「total 字段」自洽。
+
+| 编号 | 维度 | 前置条件 | 步骤 | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| G1 | guard 单跑 | 无 | `test_layers.py --suite guard --out tests/tmp/layers-split.json` | 退出 0 | `rc=0` | PASS |
+| G2 | checks 覆盖同路径 | G1 完成 | `test_layers.py --suite checks --out <同上>` | 退出 0 | `rc=0` | PASS |
+| G3 | 不丢前一套件 | G1+G2 | 读文件的 `suites.guard` | 44 行（曾被覆盖成 0 行） | `guard rows=44` | PASS |
+| G4 | 后一套件也在 | G1+G2 | 读文件的 `suites.checks` | 18 行 | `checks rows=18` | PASS |
+| G5 | total 描述文件本身 | G1+G2 | 读文件的 `total` | 等于 44+18=62（曾为 `None`） | `total=62 rows=62` | PASS |
+
+G5 做过变异验证：删掉 `merge_into_existing()` 里的 `"total": len(fresh)` 一行后，
+用例报 `FAIL G5 total=None rows=62`，79/80——说明它咬的正是这个缺陷，不是恒真断言。
 
 ## 已知约定核对
 

@@ -519,6 +519,12 @@ def merge_into_existing(path: Path, suites: dict) -> dict:
 
     A suite this run did not execute keeps its previous rows.  A suite it did
     execute replaces them, so re-running one half cannot leave a stale copy.
+
+    The totals are recomputed over the merged rows rather than over this run's,
+    so ``total`` always describes the file it sits in.  Reading the merged
+    ``passed`` while leaving ``total`` absent would be the same defect this
+    function exists to fix, one level up: a file that looks complete to a
+    human and reads as empty to anything that checks it.
     """
     previous = None
     if path.exists():
@@ -535,6 +541,7 @@ def merge_into_existing(path: Path, suites: dict) -> dict:
     skipped = sum(1 for r in fresh if r.get("skipped"))
     return {
         "suites": merged,
+        "total": len(fresh),
         "passed": len(fresh) - failed - skipped,
         "failed": failed,
         "skipped": skipped,
