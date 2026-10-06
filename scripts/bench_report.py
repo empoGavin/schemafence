@@ -131,9 +131,13 @@ def resource_section(payload: dict) -> str:
 
 def layers_section(payload: dict) -> str:
     out = []
+    suites = payload.get("suites") or {}
+    absent = [title for key, title in (("guard", "运行时七层护栏 (guard.py)"),
+                                       ("checks", "静态七层检查 (checks.py)"))
+              if not suites.get(key)]
     for suite, title in (("guard", "运行时七层护栏 (guard.py)"),
                          ("checks", "静态七层检查 (checks.py)")):
-        rows = payload["suites"].get(suite) or []
+        rows = suites.get(suite) or []
         if not rows:
             continue
         passed = sum(1 for r in rows if r["passed"] and not r.get("skipped"))
@@ -156,6 +160,14 @@ def layers_section(payload: dict) -> str:
                        f"`{r['sql']}` is read-only, but the layer refuses it rather than "
                        f"allow a function that can also change a session. Change it only "
                        f"if you need session introspection more than you need the ban.")
+        out.append("")
+    if absent:
+        # Say it rather than print a half-empty section: a report that shows
+        # only the checks reads as if the guard suite passed, when in fact it
+        # was never run against this file.
+        out.append(f"**未包含：{'、'.join(absent)}。** 两个套件的旗标不同（guard 不需要库，"
+                   f"checks 的 live 半场需要 `--db`），所以是两条命令，缺哪条补哪条；"
+                   f"两条都跑完 `bench/layers.json` 会自动合并。")
         out.append("")
     return "\n".join(out)
 

@@ -224,22 +224,26 @@ python scripts/bench_store.py --backend pg --db "$DSN_RW" \
 ## 4. 七层检查与七层护栏
 
 ```bash
-# 两个套件全跑：运行时护栏 44 例，静态检查 19 例
+# 两个套件全跑：运行时护栏 44 例，静态检查 18 例（库侧那条需 --db）
 python scripts/test_layers.py
 
-# 只跑其中一套
-python scripts/test_layers.py --suite guard
-python scripts/test_layers.py --suite checks
+# 只跑其中一套。两条命令的 --out 默认是同一个文件，
+# 分两次跑时必须都指向它，第二次会与第一次合并
+python scripts/test_layers.py --suite guard --out bench/layers.json
+python scripts/test_layers.py --suite checks --out bench/layers.json
 
 # 带上数据库，把 check 5（结果合理性，读 pg_stats）也跑掉
-python scripts/test_layers.py --suite checks --db "$DSN_RW"
+python scripts/test_layers.py --suite checks --db "$DSN_RW" --out bench/layers.json
 
 # 打印库侧那一层需要的 SQL 与 psql 验证命令
 python scripts/test_layers.py --show-env
 ```
 
-输出：`bench/layers.json`，stdout 上逐条 `PASS / FAIL`，失败时打印"期望 / 实际"。退出码：
-任一用例失败即 1，便于接进 CI。
+文件里缺哪个套件，命令会打 `note: no guard rows …`，报告也会写明"未包含"，
+不会让一个只跑了 checks 的文件看起来像"护栏也过了"。
+
+输出：`bench/layers.json`（分两次跑时按套件合并），stdout 上逐条 `PASS / FAIL`，
+失败时打印"期望 / 实际"。退出码：任一用例失败即 1，便于接进 CI。
 
 用例断言的是三件事，不只是"拒绝了没有"：**停在哪一层**（`L2` 还是 `L3`）、
 **理由里有没有关键词**、**放行时 SQL 被改成什么样**（补的 LIMIT 是不是 100）。

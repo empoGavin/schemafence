@@ -111,17 +111,24 @@ python3 scripts/bench_store.py --backend pg --repeat 10 --db "$DSN_RW" \
 ## 5. 测试三：七层检查 + 七层护栏
 
 ```bash
-python3 scripts/test_layers.py --out bench/layers.json
+# 两条命令写同一个 --out，第二个会与第一个合并（不会互相覆盖）
+python3 scripts/test_layers.py --suite guard --out bench/layers.json
 
 # 补跑库侧的 check 5（读 pg_stats）
-python3 scripts/test_layers.py --suite checks --db "$DSN_RW"
+python3 scripts/test_layers.py --suite checks --db "$DSN_RW" --out bench/layers.json
+
+# 也可以一条命令跑完，但库侧那条还得单独补
+python3 scripts/test_layers.py --out bench/layers.json
 
 # 打印库侧那一层需要的 SQL 与 psql 验证命令
 python3 scripts/test_layers.py --show-env
 ```
 
-- **应该看到**：逐条 `PASS`，末尾 `61/61 cases passed`（不带 `--db` 时 1 条 SKIP）。
-  带 `--db` 时 SKIP 消失。
+- **应该看到**：逐条 `PASS`。第一条是 `44/44 cases passed`，第二条是 `17/17`（1 条 SKIP，
+  因为 check 5 的另一半没接库）+ 一句 `note: no guard rows in this file`——**这句是提醒，不是错误**：
+  它说的是"这次没跑 guard，文件里那份是上一次的"。第二条跑完 `bench/layers.json` 里就是 44 + 18。
+- 如果某条命令打印 `note: no guard rows …`，而你又没先跑过 guard，那报告里就会缺这一半。
+  报告会明确写出"未包含"哪个套件，不会装作它跑过了。
 - 断言的不只是"拒绝了没有"，还有**停在哪一层**和**理由里有没有关键词**。
 
 库侧那两条要亲眼看输出，它们是 L7 唯一的物证：

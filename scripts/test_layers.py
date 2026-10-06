@@ -503,6 +503,41 @@ def print_suite(rows: list[dict], title: str) -> None:
             print(f"        → {row['actual'][:100]}")
 
 
+def merge_into_existing(path: Path, suites: dict) -> dict:
+    """Fold this run's suites into whatever the file already holds.
+
+    Necessary because the two live halves need different flags — ``--suite
+    guard`` needs no database, ``--suite checks --db`` does — so the run is
+    normally two commands, and both default to the same output path.  Without
+    this, the second command silently replaced the first: the run printed
+    44/44 and the file next to it held nothing but the 18 checks, which is
+    precisely backwards from what an artefact is for.
+
+    A suite this run did not execute keeps its previous rows.  A suite it did
+    execute replaces them, so re-running one half cannot leave a stale copy.
+    """
+    previous = None
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            previous = None  # a corrupt file is not worth failing the run over
+
+    merged = dict((previous or {}).get("suites") or {})
+    merged.update({k: v for k, v in suites.items() if v})
+
+    fresh = [r for rows in merged.values() for r in rows]
+    failed = sum(1 for r in fresh if not r["passed"])
+    skipped = sum(1 for r in fresh if r.get("skipped"))
+    return {
+        "suites": merged,
+        "passed": len(fresh) - failed - skipped,
+        "failed": failed,
+        "skipped": skipped,
+        "ran_this_invocation": [k for k, v in suites.items() if v],
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="seven checks + seven guard layers")
     parser.add_argument("--suite", default="all", choices=["guard", "checks", "all"])
@@ -546,11 +581,15 @@ def main(argv=None) -> int:
     if failed:
         print(f"{len(failed)} FAILED: " + ", ".join(r["id"] for r in failed))
 
-    write_json(args.out, {"suites": {"guard": guard_rows, "checks": check_rows},
-                          "passed": len(rows) - len(failed) - len(skipped),
-                          "failed": len(failed), "skipped": len(skipped)})
     written = Path(args.out)
+    payload = merge_into_existing(written, {"guard": guard_rows, "checks": check_rows})
+    missing = [s for s in ("guard", "checks")
+               if not (payload["suites"].get(s) or [])]
+    write_json(written, payload)
     print(f"json: {written.relative_to(ROOT) if written.is_relative_to(ROOT) else written}")
+    if missing:
+        print(f"  note: no {', '.join(missing)} rows in this file — that suite has "
+              f"not been run against this --out yet")
     return 1 if failed else 0
 
 
