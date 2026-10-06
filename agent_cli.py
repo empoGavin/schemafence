@@ -697,7 +697,15 @@ def main(argv=None) -> int:
         return 0
 
     applied = load_env_file(ENV_FILE)
-    embedder = make_embedder(args)
+    # Bad operator input (a missing corpus, a malformed --search-path, an
+    # api embedder with no key) used to surface as a raw traceback with exit
+    # 1.  The message was already actionable; only the delivery was wrong.
+    # Catch the input-shaped failures, say them in one line, exit non-zero.
+    try:
+        embedder = make_embedder(args)
+    except (ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print("schemafence agent — answers from a DBA knowledge base, executes behind a fence")
     if applied:
         print(f"env file   : {ENV_FILE} sets {', '.join(applied)}")
@@ -715,20 +723,24 @@ def main(argv=None) -> int:
               f"endpoint is {embedder.base_url} — most providers will reject it. "
               f"Set SF_EMBED_MODEL (e.g. BAAI/bge-m3 on SiliconFlow, also 1024d).")
 
-    if args.ingest:
-        return cmd_ingest(args, embedder)
-    if args.ask:
-        return cmd_ask(args, embedder)
-    if args.genq:
-        return cmd_genq(args, embedder)
-    # --report first: it runs the eval *and* the tuning grid and writes both.
-    # Checked before --eval because `--eval --report x.md` used to fall into
-    # cmd_eval, print the numbers and silently write no file.
-    if args.report:
-        return cmd_report(args, embedder)
-    if args.eval:
-        return cmd_eval(args, embedder)
-    return cmd_tune(args, embedder)
+    try:
+        if args.ingest:
+            return cmd_ingest(args, embedder)
+        if args.ask:
+            return cmd_ask(args, embedder)
+        if args.genq:
+            return cmd_genq(args, embedder)
+        # --report first: it runs the eval *and* the tuning grid and writes both.
+        # Checked before --eval because `--eval --report x.md` used to fall into
+        # cmd_eval, print the numbers and silently write no file.
+        if args.report:
+            return cmd_report(args, embedder)
+        if args.eval:
+            return cmd_eval(args, embedder)
+        return cmd_tune(args, embedder)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
