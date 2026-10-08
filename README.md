@@ -1,7 +1,6 @@
 # schemafence
 
-> An agent that answers database questions from a DBA knowledge base and diagnoses a live instance, a fence  
-> that every statement passes before it reaches the database.
+> an agent that answers database questions from a DBA knowledge base and diagnoses issues on a live instance, and a fence that every statement must pass through before it reaches the database.
 >
 > 一个懂数据库的助手（知识库 + 活库诊断，比如回答"这张表为什么慢"），  
 > 外加一圈护栏（每一条要落到库上的语句，先过七道闸门再执行）。
