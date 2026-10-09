@@ -240,7 +240,9 @@ class Embedder:
         if vecs and len(vecs[0]) != self.dim:
             raise RuntimeError(
                 f"the endpoint returned {len(vecs[0])}-dim vectors but the store "
-                f"expects {self.dim} (set SF_EMBED_DIM, or recreate the table)")
+                f"expects {self.dim} (pass --dim {len(vecs[0])}, or set "
+                f"SF_EMBED_DIMENSIONS={self.dim} to ask the provider for that "
+                f"size — or recreate the table)")
         return vecs
 
 
