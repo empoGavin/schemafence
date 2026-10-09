@@ -231,3 +231,14 @@ bench/
 # with scripts/make_scale_corpus.py; the script is committed, the 2000 files
 # are not.
 examples/knowledge-scale/
+
+# PostgreSQL 16 manual, repaginated per chapter by scripts/convert_pg_official.py
+examples/knowledge-pg-official/
+
+# PostgreSQL 14 Internals book, repaginated per chapter by
+# scripts/convert_pg_internals.py — copyrighted book, personal local use only
+examples/knowledge-pg-internals/
+
+# every corpus merged into one tree, assembled by
+# scripts/ingest_pgvector.py --single-db (derived; also mirrors the book above)
+examples/knowledge-merged/
