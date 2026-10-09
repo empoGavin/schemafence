@@ -32,6 +32,21 @@
 
 ## 本仓库的合成语料包
 
+本仓库共有五套语料，详细说明见各自的文档：
+
+| 语料包 | 内容 | 文档 |
+|---|---|---|
+| `examples/knowledge/` | 8 篇脱敏 runbook（最初的包） | README |
+| `examples/knowledge-dba/` | 14 篇合成笔记，本篇余下部分详解 | 本文 |
+| `examples/knowledge-pg/` | 31 篇 PG 运维包：通识 + 故障复盘 + 诊断流程 | [`pg-corpus.md`](pg-corpus.md) |
+| `examples/knowledge-pg-official/` | PG 16 官方手册按章重排（生成物，不入仓库） | [`pg-corpus.md`](pg-corpus.md) |
+| `examples/knowledge-pg-internals/` | *PostgreSQL 14 Internals*（Parts I–II，Egor Rogov）按章重排（生成物，不入仓库） | [`pg-corpus.md`](pg-corpus.md) |
+
+另有 `examples/knowledge-merged/` —— 上面五套的**派生合并树**，由
+`python scripts/ingest_pgvector.py --single-db` 生成（也需要时才会存在），
+用途是灌进**一个** pgvector 库，见 [`pg-corpus.md`](pg-corpus.md) 第五节。
+它不是第六套语料，别单独评测。
+
 `examples/knowledge-dba/` 共 14 篇，全部属于上面第一类和第三类：
 
 | 文件 | 主题 |

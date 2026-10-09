@@ -2,13 +2,13 @@
 
 按顺序照做的清单：从推代码到出报告。每条命令后面写「应该看到什么」和「不对时怎么办」。
 
-参数含义、指标口径、每个脚本回答什么问题，在 [bench-guide.md](bench-guide.md)；  
-这份只管操作顺序。离线那一半已经在 Windows 上跑过，数字见  
-[bench-report.md](bench-report.md)；这份手册的重点是 live 那一半——  
+参数含义、指标口径、每个脚本回答什么问题，在 [bench-guide.md](bench-guide.md)；
+这份只管操作顺序。离线那一半已经在 Windows 上跑过，数字见
+[bench-report.md](bench-report.md)；这份手册的重点是 live 那一半——
 本机没有 PostgreSQL，pgvector 侧、真库工具执行、API 嵌入都只能在 VM 上做。
 
-**要测「CPU 与内存差多少」而不是「延迟差多少」，看  
-[bench-scale-runbook.md](bench-scale-runbook.md)**：40 片时两个后端的资源差  
+**要测「CPU 与内存差多少」而不是「延迟差多少」，看
+[bench-scale-runbook.md](bench-scale-runbook.md)**：40 片时两个后端的资源差
 被噪声淹没，那份手册把语料放大 100 倍后重测，并且解释了为什么必须这么做。
 
 ---
@@ -22,7 +22,7 @@ git push origin main
 ```
 
 - **应该看到**：`main -> main`。
-- 待推的提交：`git log --oneline origin/main..HEAD` 看一眼清单，应该是 4 个  
+- 待推的提交：`git log --oneline origin/main..HEAD` 看一眼清单，应该是 4 个
   （审计日志 fix、基准脚本、报告与指南、指南连接身份修正）加上本次的 ingest 变更。
 - **不对时**：`git status` 有意外改动就先看清是什么，别 `-A` 一把提。
 
@@ -39,7 +39,7 @@ python3 -c "import psycopg; print('psycopg', psycopg.__version__)"
 ```
 
 - **应该看到**：psycopg 3.x 的版本号。
-- **不对时**：`ModuleNotFoundError: psycopg` 说明 venv 没激活或 pip 装到了别的解释器，  
+- **不对时**：`ModuleNotFoundError: psycopg` 说明 venv 没激活或 pip 装到了别的解释器，
   先 `which python3` 确认自己在哪个环境里。
 
 ---
@@ -57,9 +57,9 @@ psql "$DSN_RO" -c "DELETE FROM shop.orders WHERE 1=1"
 ```
 
 - `setup_rag.sql` 是幂等的，重复跑没事，它建 `doc_chunks` + HNSW 索引 + 只读角色 `agent_ro`。
-- 最后一条**必须报错**：`ERROR:  permission denied for table orders`。看到 ERROR 才是对的，  
+- 最后一条**必须报错**：`ERROR:  permission denied for table orders`。看到 ERROR 才是对的，
   这是七层护栏里 L7a 的物理兜底。
-- **两个连接身份别混**：写库与读 `pg_stats` 用 `DSN_RW`，只读验证用 `DSN_RO`。  
+- **两个连接身份别混**：写库与读 `pg_stats` 用 `DSN_RW`，只读验证用 `DSN_RO`。
   `agent_ro` 只有 `doc_chunks` 的 SELECT，拿它跑存储基准会在建表时就被拒。见 guide §1.2。
 
 ---
@@ -86,7 +86,7 @@ python3 scripts/bench_embedding.py --mode api --dims 1024 \
   1. 3.1 与 3.2 复现出本机那组数（chunk 256/512 = 97.7%，1024 = 95.5%；维度越低命中越低）；
   2. 3.3 的 `hit@5` 比离线高多少——这是词法 vs 语义的量化差；
   3. 那道同义题（"…占一半…" vs 语料里的 "50%"）在 3.3 里是否翻盘。离线 18 种配置它全败。
-- **不对时**：3.3 报 key 相关错误，先用 guide §1.3 的 `curl` 确认通路。  
+- **不对时**：3.3 报 key 相关错误，先用 guide §1.3 的 `curl` 确认通路。
   注意 API 那条每行配置都要全量嵌入一次，成本按行数算，别把网格开太大。
 
 ---
@@ -100,14 +100,14 @@ python3 scripts/bench_store.py --backend pg --repeat 10 --db "$DSN_RW" \
     --reference bench/store-json.json --out bench/store-pg.json
 ```
 
-- **应该看到**：每个阶段一行——wall、CPU、CPU 占 wall 比、RSS 增量与峰值、进程读写字节。  
+- **应该看到**：每个阶段一行——wall、CPU、CPU 占 wall 比、RSS 增量与峰值、进程读写字节。
   pg 那次末尾还有 top-1 一致率与 overlap@k。
 - **关注三件事**：
   1. 灌库代价——pgvector 在 autocommit 连接上逐行 INSERT，对比 JSON 写一个文件；
   2. `search` 与 `search_seqscan` 的 p50 比值，这是 HNSW 值不值的答案；
   3. top-1 一致率——HNSW 是近似索引，低于 100% 要能说出差在哪几题。
-- **注意**：pg 这一路会**按 source 重灌** `doc_chunks`（见 guide §1.4），  
-  跑完库里就是 `chunk 512 / overlap 64` 那一版。要恢复自己的版本：  
+- **注意**：pg 这一路会**按 source 重灌** `doc_chunks`（见 guide §1.4），
+  跑完库里就是 `chunk 512 / overlap 64` 那一版。要恢复自己的版本：
   `python3 agent_cli.py --ingest examples/knowledge-dba --db "$DSN_RW" --rebuild`。
 
 ---
@@ -128,10 +128,10 @@ python3 scripts/test_layers.py --out bench/layers.json
 python3 scripts/test_layers.py --show-env
 ```
 
-- **应该看到**：逐条 `PASS`。第一条是 `44/44 cases passed`，第二条是 `17/17`（1 条 SKIP，  
-  因为 check 5 的另一半没接库）+ 一句 `note: no guard rows in this file`——**这句是提醒，不是错误**：  
+- **应该看到**：逐条 `PASS`。第一条是 `44/44 cases passed`，第二条是 `17/17`（1 条 SKIP，
+  因为 check 5 的另一半没接库）+ 一句 `note: no guard rows in this file`——**这句是提醒，不是错误**：
   它说的是"这次没跑 guard，文件里那份是上一次的"。第二条跑完 `bench/layers.json` 里就是 44 + 18。
-- 如果某条命令打印 `note: no guard rows …`，而你又没先跑过 guard，那报告里就会缺这一半。  
+- 如果某条命令打印 `note: no guard rows …`，而你又没先跑过 guard，那报告里就会缺这一半。
   报告会明确写出"未包含"哪个套件，不会装作它跑过了。
 - 断言的不只是"拒绝了没有"，还有**停在哪一层**和**理由里有没有关键词**。
 
@@ -150,7 +150,7 @@ psql "$DSN_RW" -c "SET statement_timeout='10s'; SELECT pg_sleep(20)"
 tail -n 5 agent_trace.jsonl
 ```
 
-- **关注**：`agent_trace.jsonl` 里被拦下的写操作应该显示 `decision=blocked` 和具体层号。  
+- **关注**：`agent_trace.jsonl` 里被拦下的写操作应该显示 `decision=blocked` 和具体层号。
   如果这里全是 `ok` 加空 layer，说明回填又断了——这正是 `28791b7` 修的那个 bug。
 
 ---
@@ -162,7 +162,7 @@ python3 scripts/bench_report.py          # → docs/bench-report.md
 ```
 
 - **应该看到**：`docs/bench-report.md` 被重写，第 2、3 节数字来自你刚跑出来的 JSON。
-- 没跑过的部分（比如没有 key 时的 API 批次）不会消失，会渲染成**产生它的那条命令**，  
+- 没跑过的部分（比如没有 key 时的 API 批次）不会消失，会渲染成**产生它的那条命令**，
   这样"测过"与"没测"分得清。
 - **别碰** `docs/bench-findings.md`：那是手写的结论解读，脚本不覆盖，重跑也不该被覆盖。
 
@@ -178,7 +178,7 @@ git push
 ```
 
 - 原始 JSON 留在 `bench/` 即可，不必提交；报告提交就有证据链。
-- 如果 VM 上的数字与本机差得多（比如 CPU 占 wall 比、p50），那是机器差异，  
+- 如果 VM 上的数字与本机差得多（比如 CPU 占 wall 比、p50），那是机器差异，
   在结论里写清在哪台机器上量的，别当成回归。
 
 ---
