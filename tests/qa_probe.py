@@ -8,6 +8,10 @@ exits non-zero if any case failed.
     python tests/qa_probe.py
 
 Temporary stores and outputs land under ``tests/tmp/`` (gitignored).
+
+Every CLI child runs with an empty home and no ``SF_*`` inherited — see
+``child_env``, and section I, which asserts it.  ``SF_QA_TIMEOUT`` (seconds,
+default 300) caps a single CLI call.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +36,12 @@ from schemafence.tools import Toolbox, run_tool_selftest          # noqa: E402
 PY = sys.executable
 CLI = str(ROOT / "agent_cli.py")
 TRACE = str(TMP / "qa-trace.jsonl")
+# The children's home — a directory with no .schemafence.env in it.
+CHILD_HOME = TMP / "home"
+CHILD_HOME.mkdir(parents=True, exist_ok=True)
+TIMEOUT = int(os.environ.get("SF_QA_TIMEOUT", "300"))
 RESULTS: list[tuple[str, str, bool, str]] = []
+TIMINGS: list[tuple[str, float]] = []
 
 
 def check(cid: str, desc: str, ok: bool, detail: str = "") -> None:
@@ -40,14 +50,39 @@ def check(cid: str, desc: str, ok: bool, detail: str = "") -> None:
     print(f"  {mark}  {cid:<4} {desc}" + (f"   [{detail}]" if detail else ""))
 
 
-def cli(args, env=None, timeout=90):
-    e = dict(os.environ)
-    e.pop("SF_EMBED_API_KEY", None)
-    e.pop("SF_LLM_API_KEY", None)
-    if env:
-        e.update(env)
-    return subprocess.run([PY, CLI, *args], capture_output=True, text=True,
-                          env=e, cwd=str(ROOT), timeout=timeout)
+def child_env(extra: dict | None = None) -> dict:
+    """The environment every child process here runs under.
+
+    ``agent_cli.py`` loads ``~/.schemafence.env`` at startup, so the operator's
+    key file reached this harness — which claims to be offline.  With
+    ``SF_EMBED_API_KEY`` in it the embedder switches to the API and ``--eval``
+    stops being 44 hash lookups: it becomes 44 HTTP calls, and on a VM that
+    exceeded the subprocess cap without printing anything but a timeout.
+    ``load_env_file`` never overrides a variable that is already set, so
+    dropping ``SF_*`` also covers keys exported in the calling shell, and
+    pointing HOME at an empty directory removes the file itself.  Cases that
+    need a setting pass it in ``extra`` and get exactly that.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SF_")}
+    env["HOME"] = str(CHILD_HOME)
+    env["USERPROFILE"] = str(CHILD_HOME)        # the same directory on Windows
+    if extra:
+        env.update(extra)
+    return env
+
+
+def cli(args, env=None, timeout=None):
+    if timeout is None:
+        timeout = TIMEOUT
+    started = time.perf_counter()
+    try:
+        return subprocess.run([PY, CLI, *args], capture_output=True, text=True,
+                              env=child_env(env), cwd=str(ROOT), timeout=timeout)
+    finally:
+        label = args[0] if args else "(no args)"
+        if label == "--ask" and len(args) > 1:
+            label += " " + args[1][:12]
+        TIMINGS.append((label, time.perf_counter() - started))
 
 
 # --------------------------------------------------------------------------- #
@@ -525,6 +560,41 @@ def scale_corpus_cases() -> None:
           chunks >= 20, f"chunks={chunks}")
 
 
+# --------------------------------------------------------------------------- #
+# I. hermetic children — the harness runs on its own settings, not the machine's
+# --------------------------------------------------------------------------- #
+def hermetic_cases() -> None:
+    """The CLI children must not pick up the operator's ``~/.schemafence.env``.
+
+    Not hygiene for its own sake.  That file lives on any machine set up for
+    live work, and a key in it switches the embedder to the API, which turns
+    ``--eval`` from 44 hash lookups into 44 HTTP calls.  The dev box has no
+    such file and the case takes 1.7 s; the VM that has one blew the cap and
+    showed a timeout with nothing to say which run it came from.  Both cases
+    fail if ``child_env`` ever stops stripping.
+    """
+    print("\n[I] hermetic children — no key file, no exported key")
+    store = str(TMP / "hermetic.json")
+
+    p = cli(["--ingest", "examples/knowledge", "--store", store])
+    env_line = next((l for l in p.stdout.splitlines() if l.startswith("env file")), "")
+    check("I1", "the child looks for its env file under this harness's empty home",
+          env_line.startswith(f"env file   : {CHILD_HOME}") and "not found" in env_line,
+          env_line.strip() or "no env file line in the output")
+
+    os.environ["SF_EMBED_API_KEY"] = "not-a-real-key"
+    os.environ["SF_EMBED_BASE_URL"] = "http://127.0.0.1:9/v1"
+    try:
+        p = cli(["--ingest", "examples/knowledge", "--store", store])
+    finally:
+        os.environ.pop("SF_EMBED_API_KEY", None)
+        os.environ.pop("SF_EMBED_BASE_URL", None)
+    embed_line = next((l for l in p.stdout.splitlines() if l.startswith("embedding")), "")
+    check("I2", "a key exported in the calling shell does not reach the child",
+          p.returncode == 0 and "offline" in embed_line,
+          f"rc={p.returncode} {embed_line.strip()}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -535,11 +605,17 @@ def main() -> int:
     eval_cases()
     layer_case()
     scale_corpus_cases()
+    hermetic_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)
     failed = [cid for cid, _d, ok, _x in RESULTS if not ok]
     print(f"\n=== {passed}/{total} cases passed ===")
+    if TIMINGS:
+        top = sorted(TIMINGS, key=lambda row: -row[1])[:3]
+        print("slowest CLI calls: "
+              + ", ".join(f"{cmd} {sec:.1f}s" for cmd, sec in top)
+              + f"  (cap {TIMEOUT}s per call, SF_QA_TIMEOUT overrides)")
     if failed:
         print("failed:", ", ".join(failed))
         return 1

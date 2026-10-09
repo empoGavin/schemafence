@@ -19,9 +19,11 @@
 | F. 评测基线 | 2 | 0 | 2 PASS |
 | G. 产物完整性 | 5 | 1（G5，总数字段未回填） | 5 PASS |
 | H. 规模语料生成器 | 4 | 0 | 4 PASS |
-| **合计** | **84** | **10** | **84 PASS** |
+| I. 隔离子进程 | 2 | 0 | 2 PASS |
+| **合计** | **86** | **10** | **86 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
+I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -168,6 +170,24 @@ G5 做过变异验证：删掉 `merge_into_existing()` 里的 `"total": len(fres
 
 H3 的存在理由：基准会**照单全收目录里的文件**。若小规模重跑留着上一轮的大批文件，
 测出来的规模就不是命令里写的那个，而且不会有任何报错。
+
+## I. 隔离子进程（harness 只按自己的设置跑）
+
+`agent_cli.py` 启动时会读 `~/.schemafence.env`（`load_env_file`）。那个文件是操作者的，
+不是 harness 的：里面有 `SF_EMBED_API_KEY` 时嵌入器切到 API，`--eval` 就从 44 次哈希查表
+变成 44 次 HTTP 往返——开发机上没有这个文件、D5 只要 1.7 s；装了 key 的 Linux VM 上
+直接撞穿子进程上限，终端只剩一句 timeout，看不出是哪条跑出来的。所以 `child_env()`
+给每个子进程一个空 home（`HOME` + `USERPROFILE`）并丢掉继承来的 `SF_*`，本组锁的就是它。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| I1 | 空 home | 无 | `--ingest examples/knowledge --store tests/tmp/hermetic.json`，读输出里的 `env file` 行 | 找的是 `<repo>/tests/tmp/home/.schemafence.env` 且报告 not found | 命中 | PASS |
+| I2 | shell 里的 key | 调用方 `SF_EMBED_API_KEY` / `SF_EMBED_BASE_URL` 已导出 | 同上 | `rc=0`，`embedding : offline / hashed-lexical` | `rc=0` | PASS |
+
+反向验证：把带 `SF_EMBED_API_KEY` 的 `.schemafence.env` 放进一个假 home，用
+`USERPROFILE=<假 home> HOME=<假 home>` 跑整个 harness——修复前 D1/D2/D5/D6/D16/D19
+与 F1/F2 共 8 条 FAIL（端点指死端口时是 `rc=2`；指真端点时就是 VM 上的那次超时），
+修复后 86/86。
 
 ## 已知约定核对
 
