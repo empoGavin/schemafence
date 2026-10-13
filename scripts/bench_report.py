@@ -213,7 +213,7 @@ def main(argv=None) -> int:
     md.append("| SQL 七层静态检查与运行时七层护栏，逐层行为是否正确 | `scripts/test_layers.py` |")
     md.append("")
     md.append("复现命令见第 5 节；测量方法与口径见第 1 节。"
-              "结论与解读写在 [`docs/bench-findings.md`](bench-findings.md)，"
+              "结论与解读写在 [`docs/bench.md`](bench.md)，"
               "重跑基准不会覆盖它。")
     md.append("")
 
@@ -342,7 +342,7 @@ def main(argv=None) -> int:
     md.append("python scripts/bench_report.py")
     md.append("```")
     md.append("")
-    md.append("> 本报告由脚本生成；结论性段落请写在 `docs/bench-findings.md`，"
+    md.append("> 本报告由脚本生成；结论性段落请写在 `docs/bench.md`，"
               "重跑基准不会覆盖它。")
     md.append("")
 

@@ -12,7 +12,7 @@
 | pgvector 与 JSON 两种存储的检索性能与内存/IO/CPU 对比 | `scripts/bench_store.py`     |
 | SQL 七层静态检查与运行时七层护栏，逐层行为是否正确            | `scripts/test_layers.py`     |
 
-复现命令见第 5 节；测量方法与口径见第 1 节。结论与解读写在 [`docs/bench-findings.md`](bench-findings.md)，重跑基准不会覆盖它。
+复现命令见第 5 节；测量方法与口径见第 1 节。结论与解读写在 [`docs/bench.md`](bench.md)，重跑基准不会覆盖它。
 
 ## 1. 方法
 
@@ -289,4 +289,4 @@ python scripts/test_layers.py --show-env     # 打印库侧环境准备
 python scripts/bench_report.py
 ```
 
-> 本报告由脚本生成；结论性段落请写在 `docs/bench-findings.md`，重跑基准不会覆盖它。
+> 本报告由脚本生成；结论性段落请写在 `docs/bench.md`，重跑基准不会覆盖它。

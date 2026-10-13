@@ -224,7 +224,7 @@ agent_trace.jsonl
 # QA scratch space (stores, traces, generated reports)
 tests/tmp/
 
-# Benchmark run artefacts (regenerable; the report and findings are committed)
+# Benchmark run artefacts (regenerable; docs/bench-report.md and docs/bench.md are committed)
 bench/
 
 # Scale corpus for the resource benchmark — generated, not source.  Regenerate
