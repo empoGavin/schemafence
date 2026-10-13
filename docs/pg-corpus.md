@@ -1,4 +1,4 @@
-# PG 语料包：官方手册 + 内部书 + 运维笔记，三套尺子
+# 语料包与评测：五套尺子，以及为什么形状比体量重要
 
 `examples/knowledge-pg/`、`examples/knowledge-pg-official/` 和
 `examples/knowledge-pg-internals/` 是三个**独立**的语料包，一次只能灌一个。
@@ -9,6 +9,30 @@
 | `examples/knowledge-pg/` | 「现场出了这个现象，我按什么顺序查」 | 31 篇 / 147 切片 | `eval/questions-pg.md`（50 题）**100% top-5** |
 | `examples/knowledge-pg-official/` | 「这个参数叫什么、官方怎么规定的」 | 98 篇 / 3312 切片 | `eval/questions-pg-official.md`（40 题）**82.5% top-5** |
 | `examples/knowledge-pg-internals/` | 「它内部到底是怎么运作的」（MVCC / 缓存 / WAL 机理） | 13 篇 / 145 切片 | `eval/questions-pg-internals.md`（35 题）**100% top-5** |
+
+## 零、仓库自带的五套语料
+
+换成你自己的语料是预期用法，这五套只是可以立刻跑的默认值。
+
+| 语料包 | 是什么 | 规模 | 题库 |
+|---|---|---|---|
+| `examples/knowledge/` | 8 篇脱敏 runbook（最早的包） | 8 篇 | `eval/questions.md`（16 题） |
+| `examples/knowledge-dba/` | 合成笔记：公开 PostgreSQL 知识 + 虚构场景 | 14 篇 / 40 切片 | `eval/questions-dba.md`（44 题）**97.7% top-5** |
+| `examples/knowledge-pg/` | 运维包：手册 + 事故复盘 + 诊断 runbook（手写） | 31 篇 / 147 切片 | `eval/questions-pg.md`（50 题）**100%** |
+| `examples/knowledge-pg-official/` | PostgreSQL 16 官方手册，按章重排（**生成物**） | 98 篇 / 3312 切片 | `eval/questions-pg-official.md`（40 题）**82.5%** |
+| `examples/knowledge-pg-internals/` | *PostgreSQL 14 Internals*（I–II 部），按章重排（**生成物**） | 13 篇 / 145 切片 | `eval/questions-pg-internals.md`（35 题）**100%** |
+
+两条结论比上面这些数字更重要，下面的章节都在展开它们：
+
+**语料的形状比体量更决定检索质量。** 手写包 50 题 100%；整本手册 40 题 82.5%，
+那 7 道没命中的不是知识缺失——是被书里最大的两个参考章节（`sql-commands`、
+`functions-and-operators`）挤出了 top-5。只灌其中一部而不是整本，同样的题 18/18。
+
+**合并的代价是方向的。** 3312 片的手册加进 147 片的诊断包，诊断题 −30pt；
+反过来把诊断包加进手册，覆盖题 ±0。**大库污染小库，不是反过来。**
+
+`--eval` 是量尺不是门槛，它永远把命中率和语料规模一起打印，并把该用的相关度地板
+指名给你（取命中题里最低的 top-1 分数减一个余量），而不是让你手拍一个常数。
 
 ## 一、手写包：`examples/knowledge-pg/`
 
