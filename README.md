@@ -1,5 +1,7 @@
 # schemafence
 
+[![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
+
 > An agent that answers database questions from a DBA knowledge base and diagnoses issues on a live instance, and a fence that every statement must pass through before it reaches the database.
 >
 > 三层：先查知识库，再看活库的真实样子（不是别人描述的样子），最后才决定这条语句放不放行。
