@@ -50,7 +50,7 @@ key or carries a `UNIQUE` constraint joins one row to one row and cannot
 multiply. That is why `ddl.py` records inline `PRIMARY KEY` and `UNIQUE`
 declarations, not just table-level ones.
 
-## The three tiers above it
+## The four tiers above it
 
 Ordered by what can be pinned down without a database, which is also the order
 in which they become testable.
@@ -114,6 +114,42 @@ Compiled against a query, that file can reject `created_at` where it says
 says `SUM`. It is also the only part of this that would version and regression
 test a definition when it changes.
 
+## Requested, and where each one lands
+
+Five things asked for that the tables above do not yet cover. Each one reads
+and reports. None of them executes, so none of them changes what this project
+is.
+
+| # | Asked for | Lands in | Missing today |
+| --- | --- | --- | --- |
+| **R1** | a table with no primary key is a finding | `checks.py` | `ddl.py` records inline and table-level `PRIMARY KEY` already, for S1. The rule itself is not written. |
+| **R2** | one concept, one standard: naming, type, unit, enum | `checks.py`, then tier 4 | Today only check H (`Inconsistent naming for the same concept`, missing comments) and check 1 (near-duplicate names). |
+| **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Tier 2 is its finished form. |
+| **R4** | the change-review rule set is configurable | new, see the next section | All seven layers are code. |
+| **R5** | the B-class errors, not only the A class | `checks_sql.py`, then tier 3 | S2, S4, S5, S6, and the counterexample tier. |
+
+R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
+live connection is not a write connection, which is why the `--db` axis has
+always been independent of the key axes.
+
+## A rule set has to be a file
+
+R4 is the one request with a constraint attached, because `guard.py` being
+deterministic is the whole point of that half.
+
+**The rule set is an artefact that happens to be configurable.** It lives in a
+file, it is committed, and every load writes the ruleset it applied into the
+audit record. That is what makes "who changed the fence" answerable.
+
+| | |
+| --- | --- |
+| May be configured | the table whitelist, the row cap behind `LIMIT 100`, the forbidden function list, the allowed schemas |
+| Configured with care | switches for the seven layers themselves. Turning off L3 is the same as allowing a write inside a CTE. |
+| Never configured | the decision logic |
+
+The rule set may not be fetched from a database or a service. A fence that
+depends on a row somebody can update is not a fence.
+
 ## Prior art
 
 The four error patterns in S1–S4 are a well-known class, and they were named
@@ -131,6 +167,9 @@ the mistake, which is industry-wide.
 
 ## What this will not do
 
+- **No write path.** Executing a change is not a deeper version of this project,
+  it is the failure the fence exists to prevent. Reviewing a change that a human
+  wrote is in scope, and that is `checks.py` and `checks_sql.py`.
 - **Not a general SQL linter.** What separates this from one is determinism, the
   separation between the two halves, and evidence that can be checked. Six accurate
   checks beat fifty approximate ones.
