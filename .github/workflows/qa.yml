@@ -1,0 +1,41 @@
+name: qa
+
+# Everything here runs offline: no database, no model, no API key, no network.
+# That is the point of the harness, so the workflow is expected to stay this short.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: offline selftests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: demo.py selftests (guard, router, tools, sql-checks)
+        run: python demo.py
+
+      - name: tests/qa_probe.py (the full offline harness)
+        run: python tests/qa_probe.py
+
+      # A harness that leaves files behind passes on the machine that ran it and
+      # tells you nothing about a fresh clone. Scratch space is tests/tmp/, which
+      # is gitignored, so anything showing up here is a leak.
+      - name: the run left the working tree alone
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
