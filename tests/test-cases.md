@@ -20,10 +20,12 @@
 | G. 产物完整性 | 5 | 1（G5，总数字段未回填） | 5 PASS |
 | H. 规模语料生成器 | 4 | 0 | 4 PASS |
 | I. 隔离子进程 | 2 | 0 | 2 PASS |
-| **合计** | **86** | **10** | **86 PASS** |
+| J. SQL 语义检查 | 11 | 0 | 11 PASS |
+| **合计** | **97** | **10** | **97 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
+J0–J10 随 `checks_sql.py` 一起进来（见 §J）。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -187,7 +189,31 @@ H3 的存在理由：基准会**照单全收目录里的文件**。若小规模�
 反向验证：把带 `SF_EMBED_API_KEY` 的 `.schemafence.env` 放进一个假 home，用
 `USERPROFILE=<假 home> HOME=<假 home>` 跑整个 harness——修复前 D1/D2/D5/D6/D16/D19
 与 F1/F2 共 8 条 FAIL（端点指死端口时是 `rc=2`；指真端点时就是 VM 上的那次超时），
-修复后 86/86。
+修复后 86/86（当时的用例总数；加 §J 之后总数是 97）。
+
+## J. SQL 语义检查（`checks.py` 与 `guard.py` 之间那一层）
+
+`checks.py` 只吃 Schema、`guard.py` 只吃 SQL，各自都对，所以各自都看不见这两类错误：
+查询自己合法、Schema 自己合法、回来的数却是错的。`check_sql(schema, sql)` 把两者叠起来看，
+**只报告、不裁决**——放不放行仍然只由 `guard()` 决定。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| J0 | 内置自检 | `SQL_SAMPLE_DDL` 可解析 | `run_sql_selftest()` | 9 例全过 | 9/9 | PASS |
+| J1 | S1 命中 | 同上 | `SUM(o.paid_amount)` 跨 `JOIN order_items` | 1 条 S1/high，subject 同时点出度量与子表 | `SUM(o.paid_amount) x shop.order_items` | PASS |
+| J2 | S3 命中 | 同上 | `LEFT JOIN refunds ... WHERE r.refund_amount > 0` | 1 条 S3/high，subject 带列名 | `shop.refunds.refund_amount tested in WHERE` | PASS |
+| J3 | S3 反例 | 同上 | `... WHERE r.id IS NULL` | 无 finding（反连接惯用法） | `no finding` | PASS |
+| J4 | S1 反例 | 同上 | `SUM(oi.line_amount)`（度量就在膨胀侧） | 无 finding | `no finding` | PASS |
+| J5 | S1 反例 | 同上 | 同上 + `GROUP BY oi.order_id` | 无 finding，且有一条 grain note | `... aggregated at the grain of shop.order_items` | PASS |
+| J6 | 唯一性反例 | 同上 | `JOIN subscription s ON o.id = s.order_id`（`UNIQUE`） | 无 finding | `no finding` | PASS |
+| J7 | 弃权 | 同上 | 聚合与连接都在括号子查询里 | 无 finding，note 说明只读一层 | `the statement has a nested query ...` | PASS |
+| J8 | 弃权 | 两张表同名列 | `SUM(amount)` 跨 `s.a` / `s.b` | 无 finding，note 报归属数 | `SUM(amount) belongs to 2 tables ...` | PASS |
+| J9 | 边界 | 同上 | `DELETE FROM shop.orders WHERE id = 1` | 语义层 0 finding（它不裁决），`guard()` 仍拦 | `guard_ok=False findings=0` | PASS |
+| J10 | demo 接线 | 无 | `python demo.py` | `rc=0`，输出含 `[sql-checks]` 与 `9 cases → all passed` | `rc=0` | PASS |
+
+J4/J5/J6 是这一层最容易被写坏的三个反例：**膨胀侧自己的度量不算被膨胀**、
+**已经按子表粒度聚合的不算被膨胀**、**连接键唯一的不算膨胀**。J8 与 J9 是两条纪律：
+解析不出来宁可弃权（记 note），语义层永远不碰执行路径。
 
 ## 已知约定核对
 
@@ -196,7 +222,7 @@ H3 的存在理由：基准会**照单全收目录里的文件**。若小规模�
 | 相关度地板按 `embedder.mode` 判模式 | 成立。`tools.py` 用 `mode = getattr(embedder, "mode", "offline")`；离线 = 0.0、api = 0.45（C2/C3 验证）。 |
 | 不要用 `--eval --report` 覆盖 `eval/report-dba.md` | 遵守。本次报告生成一律输出到 `tests/tmp/`（D6）。 |
 | 路由：写词命中 ≠ 写意图 | 成立（B1–B5，demo.py [router] 10 例全绿）。 |
-| demo.py 三块自检为回归门禁 | 成立，修复后 `python demo.py` 退出 0，13/10/7 全绿。 |
+| demo.py 四块自检为回归门禁 | 成立，修复后 `python demo.py` 退出 0，13/10/7/9 全绿。 |
 | 多来源标注 `甲 / 乙` 命中任一即算命中 | 成立。`_gold_sources()` 按 `/` 拆分；第 9 题 `pg-vacuum-tuning / pg-bloat-seq-scan` 在 rank 4 命中计为 hit（D5 汇总内）。 |
 | 「最近的提交 874d7bd、12b9b98、8e36a49 本地未 push」 | **与代码实际不符**：`git branch -vv` 显示 `main` 跟踪 `origin/main` 且 "up to date"；`git log` 顶部为 `8e36a49`。这三条实际已同步到 `origin/main`，并非未 push。未据此改代码。 |
 | 语料规模：knowledge 8 篇 / dba 14 篇 | 成立（ingest 报告 8 篇、14 篇）。 |

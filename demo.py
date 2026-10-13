@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 from schemafence import analyze, parse_ddl, summarize            # noqa: E402
 from schemafence.agent import run_route_selftest                 # noqa: E402
+from schemafence.checks_sql import run_sql_selftest              # noqa: E402
 from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.planner import plan                             # noqa: E402
 from schemafence.tools import run_tool_selftest                  # noqa: E402
@@ -130,6 +131,21 @@ def show_tool_selftest() -> bool:
     return passed_all
 
 
+def show_sql_selftest() -> bool:
+    heading("[sql-checks] the statement and the schema, read together")
+    rows, passed_all = run_sql_selftest()
+    for label, found, passed in rows:
+        mark = "ok  " if passed else "FAIL"
+        print(f"  {mark} {found:<10} {label}")
+    print()
+    print("  checks.py reads the schema and never sees a statement; guard.py reads")
+    print("  the statement and never sees a schema.  A fan-out and a cancelled LEFT")
+    print("  JOIN are only visible where the two meet.  These report; they do not")
+    print("  decide whether anything runs — that stays with guard().")
+    print(f"  {len(rows)} cases → {'all passed' if passed_all else 'FAILURES present'}")
+    return passed_all
+
+
 def show_live(dsn: str, schema) -> None:
     from schemafence import snapshot
 
@@ -211,6 +227,7 @@ def main(argv=None) -> int:
     guard_ok = show_guard_selftest()
     route_ok = show_route_selftest()
     tool_ok = show_tool_selftest()
+    sql_ok = show_sql_selftest()
 
     if args.ask:
         show_plan(args.ask, schema)
@@ -234,6 +251,8 @@ def main(argv=None) -> int:
     if not route_ok:
         return 1
     if not tool_ok:
+        return 1
+    if not sql_ok:
         return 1
     return 0
 

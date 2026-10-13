@@ -28,6 +28,9 @@ TMP.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT))
 
 from schemafence.agent import route, run_route_selftest          # noqa: E402
+from schemafence.checks_sql import (SQL_SAMPLE_DDL, check_sql,    # noqa: E402
+                                    run_sql_selftest)
+from schemafence.ddl import parse_ddl                            # noqa: E402
 from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.knowledge import (Chunk, Embedder, JsonStore,    # noqa: E402
                                    chunk_markdown, ingest_directory)
@@ -595,6 +598,86 @@ def hermetic_cases() -> None:
           f"rc={p.returncode} {embed_line.strip()}")
 
 
+def sql_semantics_cases() -> None:
+    """``checks.py`` reads the schema, ``guard.py`` reads the statement.
+
+    These read both, because a fan-out and a cancelled LEFT JOIN are only
+    visible where the two meet: each half is valid on its own.  The cases below
+    pin the two checks that fire, the five near misses that must stay silent,
+    and the two abstentions that must produce a note instead of a guess.
+    """
+    print("\n[J] sql-checks — the schema and the statement, read together")
+    rows, ok = run_sql_selftest()
+    check("J0", "run_sql_selftest() 9 cases all pass", ok)
+
+    schema = parse_ddl(SQL_SAMPLE_DDL)
+
+    review = check_sql(schema, "SELECT SUM(o.paid_amount) FROM shop.orders o "
+                               "JOIN shop.order_items oi ON o.id = oi.order_id")
+    check("J1", "fan-out through a 1:N join is high, and names both sides",
+          len(review.findings) == 1 and review.findings[0].check == "S1"
+          and review.findings[0].severity == "high",
+          review.findings[0].subject if review.findings else "no finding")
+
+    review = check_sql(schema, "SELECT o.id FROM shop.orders o "
+                               "LEFT JOIN shop.refunds r ON o.id = r.order_id "
+                               "WHERE r.refund_amount > 0")
+    check("J2", "a LEFT JOIN cancelled by WHERE is high, and names the column",
+          len(review.findings) == 1 and review.findings[0].check == "S3",
+          review.findings[0].subject if review.findings else "no finding")
+
+    review = check_sql(schema, "SELECT o.id FROM shop.orders o "
+                               "LEFT JOIN shop.refunds r ON o.id = r.order_id "
+                               "WHERE r.id IS NULL")
+    check("J3", "the anti-join idiom stays silent", not review.findings,
+          review.findings[0].subject if review.findings else "no finding")
+
+    review = check_sql(schema, "SELECT SUM(oi.line_amount) FROM shop.orders o "
+                               "JOIN shop.order_items oi ON o.id = oi.order_id")
+    check("J4", "a measure from the multiplying side stays silent",
+          not review.findings, review.findings[0].subject if review.findings else "no finding")
+
+    review = check_sql(schema, "SELECT SUM(o.paid_amount) FROM shop.orders o "
+                               "JOIN shop.order_items oi ON o.id = oi.order_id "
+                               "GROUP BY oi.order_id")
+    check("J5", "aggregating at the child's grain stays silent and says why",
+          not review.findings and any("grain" in n for n in review.notes),
+          review.notes[0] if review.notes else "no note")
+
+    review = check_sql(schema, "SELECT SUM(o.paid_amount) FROM shop.orders o "
+                               "JOIN shop.subscription s ON o.id = s.order_id")
+    check("J6", "a join key under UNIQUE does not multiply",
+          not review.findings, review.findings[0].subject if review.findings else "no finding")
+
+    review = check_sql(schema, "SELECT t.amt FROM (SELECT SUM(o.paid_amount) AS amt "
+                               "FROM shop.orders o JOIN shop.order_items oi "
+                               "ON o.id = oi.order_id) t")
+    check("J7", "a nested query is abstained on, with a note",
+          not review.findings and any("nested" in n for n in review.notes),
+          review.notes[0] if review.notes else "no note")
+
+    ambiguous = parse_ddl(
+        "CREATE TABLE s.a (id BIGSERIAL PRIMARY KEY, amount NUMERIC(12,2) NOT NULL);"
+        "CREATE TABLE s.b (id BIGSERIAL PRIMARY KEY, a_id BIGINT NOT NULL,"
+        " amount NUMERIC(12,2) NOT NULL);")
+    review = check_sql(ambiguous, "SELECT SUM(amount) FROM s.a x JOIN s.b y ON x.id = y.a_id")
+    check("J8", "a column owned by two tables is abstained on, not guessed",
+          not review.findings and any("belongs to 2 tables" in n for n in review.notes),
+          review.notes[0] if review.notes else "no note")
+
+    wrote = "DELETE FROM shop.orders WHERE id = 1"
+    check("J9", "these checks are not a guard: a write gets no verdict from them, "
+                "and guard() still blocks it",
+          guard(wrote).ok is False and not check_sql(schema, wrote).findings,
+          f"guard_ok={guard(wrote).ok} findings={len(check_sql(schema, wrote).findings)}")
+
+    p = subprocess.run([PY, str(ROOT / "demo.py")], capture_output=True, text=True,
+                       cwd=str(ROOT), env=child_env(), timeout=120)
+    check("J10", "demo.py runs the block and exits 0",
+          p.returncode == 0 and "[sql-checks]" in p.stdout
+          and "9 cases → all passed" in p.stdout, f"rc={p.returncode}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -606,6 +689,7 @@ def main() -> int:
     layer_case()
     scale_corpus_cases()
     hermetic_cases()
+    sql_semantics_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)

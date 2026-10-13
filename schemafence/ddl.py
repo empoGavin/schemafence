@@ -55,6 +55,8 @@ class Column:
     default: str | None = None
     references: str | None = None
     comment: str | None = None
+    primary: bool = False
+    unique: bool = False
 
     @property
     def base_type(self) -> str:
@@ -84,6 +86,7 @@ class Table:
     columns: list[Column] = field(default_factory=list)
     comment: str | None = None
     primary_key: list[str] = field(default_factory=list)
+    unique_keys: list[list[str]] = field(default_factory=list)
 
     @property
     def qualified(self) -> str:
@@ -92,6 +95,21 @@ class Table:
     def column(self, name: str) -> Column | None:
         key = name.lower()
         return next((c for c in self.columns if c.name.lower() == key), None)
+
+    def is_unique(self, name: str) -> bool:
+        """One row per value of this column, from a PK or a UNIQUE constraint.
+
+        The SQL-side checks ask this about a join key.  When the answer is no,
+        joining the table multiplies the rows on the other side, and an
+        aggregate over them counts the same row more than once.
+        """
+        key = name.split(".")[-1].lower()
+        if key in {c.lower() for c in self.primary_key}:
+            return True
+        col = self.column(key)
+        if col is not None and col.unique:
+            return True
+        return any(len(k) == 1 and k[0].lower() == key for k in self.unique_keys)
 
     @property
     def commented_columns(self) -> int:
@@ -226,6 +244,8 @@ def _parse_column(item: str) -> Column | None:
         nullable=nullable,
         default=dm.group(1).strip() if dm else None,
         references=refm.group(1) if refm else None,
+        primary="PRIMARY KEY" in upper,
+        unique=bool(re.search(r"\bUNIQUE\b", upper)),
     )
 
 
@@ -250,10 +270,19 @@ def parse_ddl(raw: str) -> Schema:
                     table.primary_key.extend(
                         p.strip().strip('"') for p in inner.split(",") if p.strip()
                     )
+                elif re.match(r"^UNIQUE\b", item, re.IGNORECASE):
+                    inner = item[item.find("(") + 1: item.rfind(")")] if "(" in item else ""
+                    cols = [p.strip().strip('"') for p in inner.split(",") if p.strip()]
+                    if cols:
+                        table.unique_keys.append(cols)
                 continue
             col = _parse_column(item)
             if col:
                 table.columns.append(col)
+
+        for col in table.columns:
+            if col.primary and col.name not in table.primary_key:
+                table.primary_key.append(col.name)
 
         for key in (table.qualified.lower(), table.name.lower()):
             if key in table_comments:
