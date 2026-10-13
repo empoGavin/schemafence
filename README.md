@@ -15,7 +15,7 @@ answer and a write-capable connection in the same process with nothing in betwee
 | Decides by     | retrieval, tool evidence, optionally a model        | fixed rules, no model and no retrieval                   |
 | Nature         | probabilistic: a wrong answer is bad advice          | deterministic: a wrong decision damages data silently    |
 | Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | not possible, by design                                  |
-| Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 9 sql-check cases |
+| Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 9 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
 | Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `schemafence/guard.py`                                   |
 
 They meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
@@ -33,7 +33,6 @@ python demo.py          # no database, no model, no API key, about 30 seconds
 schemafence — the DBA agent, and the fence in front of the database
 ====================================================================
 source : sample_schema.sql      tables : 7      columns : 33
-mode   : offline (no database, no model, no API key)
 
 [check 1] schema resolution — which entity gets picked   (1)
 [check 2] join-key sanity — rows silently dropped   (4)
@@ -41,12 +40,12 @@ mode   : offline (no database, no model, no API key)
 [check 4] NULL semantics — three-valued logic traps   (1)
 [check H] hygiene — comments and naming   (4)
 [summary]  16 finding(s): 5 high / 9 medium / 2 low
-[guard] 13 · [router] 10 · [tools] 7 · [sql-checks] 9  → all passed
 ```
 
-The `[tools]` block catches a bug the other tests could not see: the relevance floor asked
-whether an embedder was attached, and `open_store` attaches one even offline, so the API floor
-of 0.45 dropped every lexical hit (0.089–0.285).
+Each finding prints a why and a fix; four selftest blocks close the run — 13 guard, 10 router,
+7 tools, 9 sql-checks, each ending `N cases → all passed`. The `[tools]` one catches a bug the
+other tests cannot see: the relevance floor asked whether an embedder was attached, and
+`open_store` attaches one even offline, so the floor of 0.45 dropped every lexical hit (0.089–0.285).
 
 ## Half one — the agent
 
@@ -150,7 +149,8 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 ```
 [ask] 帮我删掉 orders 这张表
   · the question asks for a write — this agent may only read
-  I cannot do that.  I only read: no INSERT, UPDATE, DELETE or DDL leaves this process.
+  I cannot do that.  I only read: no INSERT, UPDATE, DELETE or DDL leaves this process.  If
+  you need the data changed, that has to go through a change request against a write-capable role.
 ```
 
 ## Status
