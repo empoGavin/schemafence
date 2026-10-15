@@ -2,18 +2,34 @@
 
 [![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
 
-> A read-only database agent plus the deterministic layer in front of it. It answers from a DBA
-> knowledge base, reads a live instance for the facts a script cannot state, reviews a schema and
-> a statement for the errors that raise nothing, and every statement passes through a fence before
-> it runs.
+> Three things a DBA has on their desk: tonight's migration script, a query somebody says is
+> returning the wrong number, and a question you would otherwise go to the runbook for.
+>
+> Hand it the script and it lists what the script will do before you run it: a table dropped, a
+> column added `NOT NULL` with no default, an index the table already carries under another name.
+> Hand it the query and it lists what the query will get wrong while the database reports no error
+> at all: a measure summed after a one-to-many join, a `LEFT JOIN` cancelled by a `WHERE`, a join
+> key that is nullable. Ask the question and it answers from the runbook, quoting the note it read.
+>
+> Facts come from the script, and from a read-only look at the live instance for the half a script
+> cannot state by itself. Every statement the agent runs passes one fence first, that fence is
+> read-only, and no model decides whether a statement may run.
 >
 > Its review rules are files rather than code, and a file can be written from a description: the
 > exported vocabulary goes to a model, or the sentence and two example scripts go to `--infer`.
 > Either way the rule is applied with no model in the loop, and it has to pass its own examples
 > first.
 >
-> 一个只读的数据库助手，加上它前面那层确定性的东西：答问靠知识库，事实靠活库补脚本答不出的
-> 那些，找「不报错却算错」的地方靠静态审核，放不放行只由一道闸门决定。
+> 就是 DBA 手上的三件事：今晚要跑的变更脚本、一条被人说「数字不对」的查询、一个原本要去翻运维
+> 手册的问题。
+>
+> 把脚本丢进去，它先列出这脚本会干什么，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有默认
+> 值的列、表上其实早就有个同列同序的索引，只是名字不同。把查询丢进去，它列出这条语句会错在哪，而
+> 数据库一句错都不报：一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消、连接键本身
+> 可空。问题问它，它从你自己的运维手册里找答案，并把出处原文贴出来。
+>
+> 事实来自脚本，也来自一次只读的活库查看——补的正是脚本说不出来的那半边。助手执行的每条语句先过
+> 同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
 >
 > 审核规则是文件不是代码，而且能由一句描述生成：把导出的词表交给模型，或者把描述和两个例子
 > 交给 `--infer`。两种方式产出的规则应用时都不需要模型，且必须先过自己的用例门禁。
@@ -422,6 +438,9 @@ model with least, which is why it is written as fixed rules.
 
 Issues and PRs welcome — especially **real-world examples of plausible-but-wrong SQL**
 (sanitized, please). They become test cases; use the [issue template](.github/ISSUE_TEMPLATE/wrong-sql.md).
+
+Write the way the opening reads: name the script, the query or the symptom first, and introduce
+the layer only after the reader has recognised the work.
 
 ## License
 

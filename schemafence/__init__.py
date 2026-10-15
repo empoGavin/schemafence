@@ -1,8 +1,13 @@
-"""schemafence — a read-only database agent, and the deterministic layer in front of it.
+"""schemafence — a change script and a query, each read before it reaches the database.
 
-The deterministic layer never calls a language model, and that is deliberate:
-every check and the guardrail are pure functions, so they behave identically with
-any model, or with no model at all.  The agent is the half allowed to be wrong.
+A DBA does two readings by hand: a change script, read before the window opens for what it
+will do to the table; and a query, read for the number it will get wrong while the database
+reports nothing.  Both are pure functions here, and a question is answered from a runbook with
+the note quoted back.  Behind them sits the deterministic layer.
+
+It never calls a language model, and that is deliberate: every check and the guardrail are pure
+functions, so they behave identically with any model, or with no model at all.  The agent is
+the half allowed to be wrong.
 
 Public surface:
     parse_ddl(text)  -> Schema          (a script as a schema, plus its change actions)
