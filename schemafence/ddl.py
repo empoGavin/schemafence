@@ -93,6 +93,30 @@ class Column:
 
 
 @dataclass
+class Index:
+    """One index on one table, however it was written.
+
+    Four spellings in a script produce one: a column-level ``UNIQUE``, a
+    table-level ``UNIQUE`` or ``PRIMARY KEY``, a named ``CONSTRAINT``, and
+    ``CREATE [UNIQUE] INDEX``.  The live catalogue is a fifth reader of the
+    same fact (see ``snapshot.py``).  A rule asks which columns an index
+    covers and in what order; the order is the part that makes an index usable
+    for a query, so ``(a, b)`` and ``(b, a)`` are two different indexes and
+    two different facts.
+    """
+
+    name: str
+    columns: list[str] = field(default_factory=list)   # ordered, lowercased
+    unique: bool = False
+    primary: bool = False
+    from_constraint: bool = False   # backed by a PK/UNIQUE constraint
+    method: str = "btree"
+    expression: bool = False        # at least one key is not a bare column
+    predicate: str | None = None    # ... WHERE ... — a partial index
+    created_here: bool = False      # a statement in the file under review made it
+
+
+@dataclass
 class Table:
     name: str
     schema: str = ""
@@ -100,6 +124,7 @@ class Table:
     comment: str | None = None
     primary_key: list[str] = field(default_factory=list)
     unique_keys: list[list[str]] = field(default_factory=list)
+    indexes: list[Index] = field(default_factory=list)
     created_by: str | None = None      # None when the table is only reached by ALTER
 
     @property
@@ -109,6 +134,23 @@ class Table:
     def column(self, name: str) -> Column | None:
         key = name.lower()
         return next((c for c in self.columns if c.name.lower() == key), None)
+
+    def add_index(self, index: Index) -> Index:
+        """Record an index, replacing one of the same name.
+
+        Replacing rather than appending keeps a script that drops and rebuilds
+        an index from looking like a script that added a second copy of it.
+        """
+        existing = self.index(index.name)
+        if existing is not None:
+            self.indexes[self.indexes.index(existing)] = index
+            return index
+        self.indexes.append(index)
+        return index
+
+    def index(self, name: str) -> Index | None:
+        key = name.split(".")[-1].lower()
+        return next((i for i in self.indexes if i.name.lower() == key), None)
 
     def is_unique(self, name: str) -> bool:
         """One row per value of this column, from a PK or a UNIQUE constraint.
@@ -171,6 +213,13 @@ class Schema:
     statements: int = 0
     unread: list[tuple[int, str, str]] = field(default_factory=list)
     #                            position, leading keyword, why nothing was read
+    origin: str = "ddl"        # which fact model these rows were read from
+    #                            "ddl"     a script, read as actions and as a schema
+    #                            "catalog" the live catalogue, read as a schema
+    # A rule that asserts what a table *already* holds can only be answered
+    # from the catalogue; ``applies_to`` in the pack is what says so, and
+    # ``run_rulepack`` refuses to apply the pack to the wrong origin rather
+    # than reporting silence as a pass.
 
     def table(self, name: str) -> Table | None:
         key = name.split(".")[-1].lower()
@@ -299,6 +348,46 @@ def _key_columns(text: str) -> list[str]:
             for p in text[open_idx + 1: close].split(",") if p.strip()]
 
 
+_INDEX_KEY = re.compile(
+    r'^"?([A-Za-z_][\w$]*)"?(?:\s+(?:ASC|DESC))?(?:\s+NULLS\s+(?:FIRST|LAST))?$',
+    re.IGNORECASE,
+)
+
+
+def _index_key_columns(text: str) -> tuple[list[str], bool]:
+    """An index's key columns, in order, plus whether any key is an expression.
+
+    The same question ``_key_columns`` answers for a constraint, asked about a
+    ``CREATE INDEX`` — where a key may carry ``ASC``/``DESC`` and an opclass,
+    or may not be a column at all.  ``lower(a)`` is not ``a``, and comparing
+    two expressions by their text would call two different indexes the same
+    index, so the ambiguity is recorded as a fact rather than resolved.
+    """
+    open_idx = text.find("(")
+    if open_idx == -1:
+        return [], False
+    try:
+        close = _matching_paren(text, open_idx)
+    except ValueError:
+        return [], False
+    columns, expression = [], False
+    for item in _split_items(text[open_idx + 1: close]):
+        key = _INDEX_KEY.match(item.strip())
+        if key:
+            columns.append(key.group(1).lower())
+        else:
+            expression = True
+    return columns, expression
+
+
+def _index_predicate(text: str) -> str | None:
+    """The WHERE clause of a partial index, whitespace-collapsed."""
+    m = re.search(r"\bWHERE\b", text, re.IGNORECASE)
+    if not m:
+        return None
+    return re.sub(r"\s+", " ", text[m.end():]).strip().rstrip(";").lower() or None
+
+
 def _split_items(body: str) -> list[str]:
     """Split a CREATE TABLE body on top-level commas."""
     items: list[str] = []
@@ -357,8 +446,9 @@ def _parse_column(item: str) -> Column | None:
 
 # ------------------------------------------------------- statements, and actions
 _CREATE_INDEX = re.compile(
-    r"^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
-    r"([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)\s+ON\s+([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)",
+    r"^CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)\s+ON\s+(?:ONLY\s+)?"
+    r"([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)",
     re.IGNORECASE,
 )
 _ALTER_TABLE = re.compile(
@@ -371,7 +461,8 @@ _ADD_COLUMN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _ADD_CONSTRAINT = re.compile(
-    r"^ADD\s+(?:CONSTRAINT\s+[\w$]+\s+)?(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK|EXCLUDE)\b(.*)$",
+    r"^ADD\s+(?:CONSTRAINT\s+([\w$]+)\s+)?"
+    r"(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK|EXCLUDE)\b(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 _DROP_COLUMN = re.compile(r"^DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?([A-Za-z_][\w$]*)",
@@ -475,6 +566,49 @@ def _find_column(table: Table, name: str) -> Column | None:
     return next((c for c in table.columns if c.name.lower() == name.lower()), None)
 
 
+def _constraint_index_name(table: Table, kind: str, columns: list[str]) -> str:
+    """The name PostgreSQL itself gives this constraint's index.
+
+    Only a name.  It is what the server generates, not a guess at what the
+    author meant, and it exists so a report can point at the row.
+    """
+    if kind == "primary":
+        return f"{table.name}_pkey"
+    return f"{table.name}_{columns[0]}_key" if columns else f"{table.name}_key"
+
+
+def _record_key(table: Table, kind: str, columns: list[str],
+                name: str | None = None) -> None:
+    """Record one key constraint, as both of the facts it is.
+
+    ``unique_keys`` is what the SQL-side checks ask about a join key;
+    ``indexes`` is what a duplicate-index rule asks about.  One constraint
+    written one way produces both, so one function produces both — a second
+    recorder is how the two would come to disagree about the same statement.
+
+    A primary key is already unique, so it is not also counted in
+    ``unique_keys``: counting it twice inflates ``unique_key_count`` and makes
+    that fact mean two different things.
+    """
+    columns = [c.lower() for c in columns]
+    if not columns:
+        return
+    if kind == "primary":
+        if not set(columns) <= {k.lower() for k in table.primary_key}:
+            for column in columns:
+                if column not in table.primary_key:
+                    table.primary_key.append(column)
+                found = _find_column(table, column)
+                if found is not None:
+                    found.nullable = False
+    elif not any(k == columns for k in table.unique_keys):
+        table.unique_keys.append(list(columns))
+    table.add_index(Index(
+        name=name or _constraint_index_name(table, kind, columns),
+        columns=list(columns), unique=True, primary=(kind == "primary"),
+        from_constraint=True, created_here=True))
+
+
 def _apply_comments(schema: Schema, table_comments: dict[str, str],
                     column_comments: dict[tuple[str, str], str]) -> None:
     """Attach COMMENT ON text to the tables and columns it names.
@@ -514,18 +648,18 @@ def _read_create_table(schema: Schema, statement: str, position: int) -> None:
             # `PRIMARY KEY (id)`.  Reading the name first is the whole
             # difference, and missing it made an unnamed constraint the only
             # spelling that counted.
+            named = re.match(r"^CONSTRAINT\s+([\w$]+)\s+", item, re.IGNORECASE)
             constraint = re.sub(r"^CONSTRAINT\s+[\w$]+\s+", "", item, flags=re.IGNORECASE)
+            name = named.group(1) if named else None
             if re.match(r"^PRIMARY\s+KEY", constraint, re.IGNORECASE):
-                table.primary_key.extend(_key_columns(constraint))
+                _record_key(table, "primary", _key_columns(constraint), name)
             elif re.match(r"^UNIQUE\b", constraint, re.IGNORECASE):
-                cols = _key_columns(constraint)
-                if cols:
-                    table.unique_keys.append(cols)
+                _record_key(table, "unique", _key_columns(constraint), name)
             elif re.match(r"^FOREIGN\s+KEY\b", constraint, re.IGNORECASE):
                 ref = _REFERENCE.search(constraint)
                 if ref:
-                    for name in _key_columns(constraint):
-                        col = table.column(name)
+                    for name_ in _key_columns(constraint):
+                        col = table.column(name_)
                         if col is not None:
                             col.references = ref.group(1)
             continue
@@ -534,14 +668,13 @@ def _read_create_table(schema: Schema, statement: str, position: int) -> None:
             table.columns.append(col)
 
     for col in table.columns:
-        if col.primary and col.name not in table.primary_key:
-            table.primary_key.append(col.name)
-        # One concept, one place.  A column-level UNIQUE and a table-level
-        # UNIQUE are the same constraint written differently, so both land in
-        # unique_keys and nothing downstream has to ask twice.
-        if col.unique and not any(name in [k.lower() for k in keys]
-                                  for name in [col.name.lower()] for keys in table.unique_keys):
-            table.unique_keys.append([col.name])
+        # One concept, one place.  A key written on the column's own line is
+        # the same constraint as one written in the table body, so both go
+        # through the one recorder and nothing downstream asks twice.
+        if col.primary:
+            _record_key(table, "primary", [col.name])
+        elif col.unique:
+            _record_key(table, "unique", [col.name])
 
     for pk in table.primary_key:
         col = table.column(pk)
@@ -569,19 +702,11 @@ def _read_alter(schema: Schema, target: str, body: str, statement: str,
 
         m = _ADD_CONSTRAINT.match(action)
         if m:
-            kind, inner = m.group(1).upper(), m.group(2)
+            cname, kind, inner = m.group(1), m.group(2).upper(), m.group(3)
             columns = _key_columns(inner)
-            if kind == "PRIMARY KEY" and columns:
-                for name in columns:
-                    if name not in table.primary_key:
-                        table.primary_key.append(name)
-                    col = _find_column(table, name)
-                    if col:
-                        col.nullable = False
-                # a primary key is already unique; counting it twice would
-                # inflate unique_key_count and make the fact mean two things
-            elif kind == "UNIQUE" and columns:
-                table.unique_keys.append(columns)
+            if kind in ("PRIMARY KEY", "UNIQUE") and columns:
+                _record_key(table, "primary" if kind == "PRIMARY KEY" else "unique",
+                            columns, cname)
             elif kind == "FOREIGN KEY" and columns:
                 ref = _REFERENCE.search(inner)
                 if ref:
@@ -686,6 +811,37 @@ def _read_alter(schema: Schema, target: str, body: str, statement: str,
             detail="empty ALTER TABLE", statement=_excerpt(statement), position=position))
 
 
+def _read_create_index(schema: Schema, statement: str, position: int) -> None:
+    """Read a CREATE INDEX as the action it is, and as the index it leaves."""
+    m = _CREATE_INDEX.match(statement)
+    assert m is not None
+    unique, name, target = bool(m.group(1)), _norm(m.group(2)), _norm(m.group(3))
+    table = _ensure_table(schema, target)
+    rest = statement[m.end():]
+    method = re.match(r"\s*USING\s+([A-Za-z_][\w$]*)", rest, re.IGNORECASE)
+    columns, expression = _index_key_columns(rest)
+    table.add_index(Index(
+        name=name.split(".")[-1], columns=columns, unique=unique,
+        method=method.group(1).lower() if method else "btree",
+        expression=expression, predicate=_index_predicate(rest), created_here=True))
+    schema.changes.append(Change(
+        kind="create_index", table=table.qualified.lower(), column=None,
+        detail=f"index {name} on {target}",
+        statement=_excerpt(statement), position=position))
+
+
+def _forget_index(schema: Schema, name: str) -> None:
+    """Drop a known index when the script drops it by name.
+
+    Without this a script that rebuilds an index — DROP then CREATE — would
+    read as two indexes on the same columns, which is the opposite of what it
+    does.
+    """
+    key = _norm(name).split(".")[-1]
+    for table in schema.tables:
+        table.indexes = [i for i in table.indexes if i.name.lower() != key]
+
+
 def _read_statement(schema: Schema, statement: str, position: int) -> bool:
     """Read one statement.  False means no reader here claims it."""
     if _CREATE_TABLE.match(statement):
@@ -711,16 +867,15 @@ def _read_statement(schema: Schema, statement: str, position: int) -> bool:
 
     m = _CREATE_INDEX.match(statement)
     if m:
-        schema.changes.append(Change(
-            kind="create_index", table=_norm(m.group(2)), column=None,
-            detail=f"index {_norm(m.group(1))} on {_norm(m.group(2))}",
-            statement=_excerpt(statement), position=position))
+        _read_create_index(schema, statement, position)
         return True
 
     for pattern, kind, label in ((_DROP_TABLE, "drop_table", "table dropped"),
                                  (_DROP_INDEX, "drop_index", "index dropped")):
         m = pattern.match(statement)
         if m:
+            if kind == "drop_index":
+                _forget_index(schema, m.group(1))
             schema.changes.append(Change(
                 kind=kind, table=_norm(m.group(1)), column=None,
                 detail=f"{_norm(m.group(1))} — {label}", statement=_excerpt(statement),

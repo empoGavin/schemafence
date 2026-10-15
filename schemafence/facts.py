@@ -24,14 +24,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .ddl import CHANGE_KINDS, Schema
+from .ddl import CHANGE_KINDS, Index, Schema, Table
 
 # The fact models a pack may declare in ``applies_to``.  A value of None means
 # it is built; anything else is the reason it is not, quoted back to whoever
 # asked for it.
+#
+# The model is also what ``run_rulepack`` checks the facts against before it
+# applies a pack: `catalog` and `ddl` carry the same fields, but they do not
+# know the same things.  A script knows only the indexes it creates; the
+# catalogue knows the ones already on the table.  A rule that asks whether a
+# table *already* has an index can only be answered from the catalogue, and a
+# pack that says so is refused rather than reported green over a script.
 FACT_MODELS: dict[str, str | None] = {
     "ddl": None,                       # a script, read as actions and as a schema
     "schema": None,                    # a schema on its own, no actions
+    "catalog": None,                   # a live PostgreSQL catalogue, read-only
     "sql": ("a statement plus a schema — not built.  The SQL-side checks hold the "
             "facts a rule would need (the FROM chain, join keys, uniqueness) but "
             "do not expose them as rows yet.  This is R8 in docs/roadmap.md, and "
@@ -113,6 +121,7 @@ def _table_rows(schema: Schema) -> list[dict]:
         "primary_key_columns": list(t.primary_key),
         "has_primary_key": bool(t.primary_key),
         "unique_key_count": len(t.unique_keys),
+        "index_count": len(t.indexes),
         "commented_columns": t.commented_columns,
         "uncommented_columns": len(t.columns) - t.commented_columns,
         "created_by_change": t.created_by is not None,
@@ -173,6 +182,71 @@ def _change_subject(row: dict) -> str:
     return str(row.get("subject") or row.get("kind") or "change")
 
 
+def _duplicates(table: Table, index: Index, other: Index) -> bool:
+    """Whether ``other`` is the same index as ``index``.
+
+    Same table, same method, same columns **in the same order** — order is what
+    makes an index usable for a query, so ``(a, b)`` and ``(b, a)`` are two
+    different indexes and only one of them can serve an equality lookup on
+    ``a``.  On top of that, an index only duplicates one that is at least as
+    strong: a full index covers a partial one on the same key, because every
+    row the partial index could serve the full one serves too, and not the
+    other way round.  Two partial indexes duplicate each other only when their
+    predicates say the same thing.
+
+    An expression key is never compared: ``lower(email)`` is not ``email``, and
+    comparing the text of two expressions would call two different indexes one
+    index.  Calling an index a duplicate of a different one is the error that
+    costs a reviewer's trust in the tool: under-reporting is a missing finding,
+    over-reporting is a wrong one.
+    """
+    if index.expression or other.expression or not index.columns:
+        return False
+    if other.columns != index.columns or other.method != index.method:
+        return False
+    return other.predicate is None or other.predicate == index.predicate
+
+
+def _index_rows(schema: Schema) -> list[dict]:
+    """One row per index, with the count a per-row rule cannot compute itself.
+
+    "Is this index a duplicate" is a question about two rows of the same
+    target, and an assertion here only ever sees one.  So the comparison is
+    made once, here, and exported as a number: the rule reads it like any other
+    fact and stays a declaration.
+    """
+    out: list[dict] = []
+    for table in schema.tables:
+        key = table.qualified.lower()
+        for index in table.indexes:
+            duplicates = [other.name for other in table.indexes
+                          if other is not index and _duplicates(table, index, other)]
+            out.append({
+                "name": index.name,
+                "table": key,
+                "qualified": f"{key}.{index.name.lower()}",
+                "columns": list(index.columns),
+                "columns_text": ", ".join(index.columns),
+                "column_count": len(index.columns),
+                "unique": index.unique,
+                "primary": index.primary,
+                "from_constraint": index.from_constraint,
+                "method": index.method,
+                "expression": index.expression,
+                "partial": index.predicate is not None,
+                "predicate": index.predicate,
+                "comparable": bool(index.columns) and not index.expression,
+                "created_here": index.created_here,
+                "duplicate_count": len(duplicates),
+                "duplicate_of": duplicates,
+            })
+    return out
+
+
+def _index_subject(row: dict) -> str:
+    return str(row.get("qualified") or row.get("name") or "index")
+
+
 TABLE_FIELDS = {
     "name": "str",
     "schema": "str",
@@ -182,6 +256,7 @@ TABLE_FIELDS = {
     "primary_key_columns": "list[str]",
     "has_primary_key": "bool",
     "unique_key_count": "int",
+    "index_count": "int",
     "commented_columns": "int",
     "uncommented_columns": "int",
     "created_by_change": "bool",       # a CREATE TABLE in this script
@@ -216,12 +291,37 @@ CHANGE_FIELDS = {
     "statement": "str",
     "position": "int",
 }
+INDEX_FIELDS = {
+    "name": "str",
+    "table": "str",
+    "qualified": "str",
+    "columns": "list[str]",
+    "columns_text": "str",             # the same thing, as text, for a regex
+    "column_count": "int",
+    "unique": "bool",
+    "primary": "bool",
+    "from_constraint": "bool",         # a PK or UNIQUE constraint backs it
+    "method": "str",                   # btree, hash, gin, ...
+    "expression": "bool",              # a key is not a bare column
+    "partial": "bool",                 # the index has a WHERE clause
+    "predicate": "str|null",           # shown, not compared: the two readers
+    #                                    render the same predicate differently
+    "comparable": "bool",              # false: its key cannot be compared at all
+    "created_here": "bool",            # a statement in this file creates it
+    "duplicate_count": "int",          # 0 = the only index serving its key
+    "duplicate_of": "list[str]",       # the indexes it repeats, by name
+}
 
-register("table", TABLE_FIELDS, ("ddl", "schema"), _table_rows, _table_subject)
-register("column", COLUMN_FIELDS, ("ddl", "schema"), _column_rows, _column_subject)
+register("table", TABLE_FIELDS, ("ddl", "schema", "catalog"),
+         _table_rows, _table_subject)
+register("column", COLUMN_FIELDS, ("ddl", "schema", "catalog"),
+         _column_rows, _column_subject)
+register("index", INDEX_FIELDS, ("ddl", "schema", "catalog"),
+         _index_rows, _index_subject)
 register("change", CHANGE_FIELDS, ("ddl",), _change_rows, _change_subject)
 
 
 __all__ = ["FACT_MODELS", "FactProvider", "PROVIDERS", "TARGETS", "FIELDS",
            "rows_for", "subject_of", "is_built", "models_for", "register",
-           "TABLE_FIELDS", "COLUMN_FIELDS", "CHANGE_FIELDS", "CHANGE_KINDS"]
+           "TABLE_FIELDS", "COLUMN_FIELDS", "CHANGE_FIELDS", "INDEX_FIELDS",
+           "CHANGE_KINDS"]
