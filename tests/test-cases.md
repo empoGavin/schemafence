@@ -22,13 +22,17 @@
 | I. 隔离子进程 | 2 | 0 | 2 PASS |
 | J. SQL 语义检查 | 11 | 0 | 11 PASS |
 | K. 规则包 | 10 | 0 | 10 PASS |
-| **合计** | **107** | **10** | **107 PASS** |
+| L. 规则推断与事实归一 | 12 | 1（L0 首跑断言写错） | 12 PASS |
+| **合计** | **119** | **11** | **119 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
 J0–J10 随 `checks_sql.py` 一起进来（见 §J）。
 K0–K9 随规则包（`schemafence/rulepack.py`、`rules/*.json`、`python -m schemafence.review`）
 一起进来（见 §K）。
+L0–L11 随事实注册表（`schemafence/facts.py`）与 `--infer` 一起进来（见 §L）。L0 首跑是
+**用例自身写错**：断言「整行相同」，而第四个写法确实多了一条 `ALTER` 动作，`change_count`
+本就该不同；归一的是规则读的那个事实，不是整行。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -250,6 +254,46 @@ K5 与 K6 是这一节存在的理由：**会撒谎的绿**有两种，一种是
 自己都没被用例证明过就上了岗。两种都不许出现。K7/K8 说明为什么规则层排在动作读取器
 之后——`ddl.py` 以前只认 `CREATE TABLE`，一份 ALTER 脚本会解析成 0 张表、0 条 finding、
 退出码 0，正好是这个项目要来抓的失败发生在自己身上。
+
+## L. 规则推断与事实归一（`--infer`）
+
+要求收口成一句话：**「我给出 prompt 可以生成规则，但规则应可马上应用——我生成的变更脚本
+审核规则，可以马上用规则去审核别人的脚本。」** 这句话把架构钉死了：**规则能立刻用
+⟺ 规则只用「引擎已认识的原子事实」**。所以顺序只能是 事实层（引擎自带）→ 规则文件 →
+求值器，中间不许有编译、训练或二次生成。推论是那句口径的准确形式：**加规则 = 加一个文件；
+加事实 = 改代码**。
+
+「一个需求可以写好几种」是这条约束的试金石。加主键有四写法：列级 `PRIMARY KEY`、表级
+`PRIMARY KEY (id)`、命名约束 `CONSTRAINT pk PRIMARY KEY (id)`、以及事后
+`ALTER TABLE … ADD PRIMARY KEY`。**规则不该知道写法**，所以四种写法必须在**事实层**塌成
+同一个事实——塌不干净，规则要么漏、要么报假。L0 就是这条的钉子。
+
+`--infer` 是「举例子 → 得到规则」的确定性形态：**把求值器反过来用**。枚举封闭词表，留下
+对所有 `fires` 命中、对所有 `silent` 沉默的候选；一条都留不下时，报出最接近的几条**近失**，
+并说清它们分不开的那几个例子就是「读者还没采集的事实」。全程零模型：它不是猜，是把
+已经能表达的东西找出来。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| L0 | 事实归一 | 一个主键的四种写法 | `rows_for("table"/"column", parse_ddl(...))` | 主键相关字段完全一致（`primary_key_columns`/`has_primary_key`/`unique_key_count`），列上 `is_primary=True`、`nullable=False`，且 `unique_key_count=0`（主键不重复计成唯一键） | `identical=True column=True pk=['id']` | PASS |
+| L1 | 词表闭合 | 一份含 14 种语句的脚本 | `{c.kind} <= set(CHANGE_KINDS)` | 读出来的每个 kind 都在词表里，`alter_table` 不再漏声明 | `14 kind(s), undeclared=[]` | PASS |
+| L2 | 推断 | `examples/rule-request-primary-key.json` | `infer_rule(...)` | 有候选，且最简的那个正是 DBA 会说的那个事实（`has_primary_key present`，无 select） | 5 候选，首选如上 | PASS |
+| L3 | 可装载 | 取第一个候选 | `load_rulepack(verify=True)` | 通过用例门禁，用例原样带过去 | 1 rule，examples 一致 | PASS |
+| L4 | 立刻可用 | 同上 | `--infer … --write` 然后 `--rules <写出的包> --ddl 同事的脚本` | 写盘成功；下一条命令就能审出问题（rc=1，只命中没有主键的那张表） | `write rc=0 review rc=1` | PASS |
+| L5 | 拒答 | 两个在现有事实上**完全相同**的脚本（`INHERITS` 读者不读） | `--infer l-impossible.json` | rc=2，打印「no rule over the current facts…」与近失，**不打印空的 `"rules": []`** | rc=2 | PASS |
+| L6 | 缺口可见 | 无 | `--facts` | rc=0，列出三个 fact model，`sql` 未建并说明理由与去处 | rc=0 | PASS |
+| L7 | 同源 | 无 | `--vocabulary` vs `PROVIDERS` | 词表由事实注册表生成，二者不能漂移 | 3 target / 3 model | PASS |
+| L8 | 去重 | 两条 target/select/断言完全相同的规则 | `find_overlaps` | 报 `exact`，点名两条 id | exact=1 | PASS |
+| L9 | 包含 | 一条更宽的 + 一条更窄的同断言规则 | 同上 | 报 `redundant`，说明窄的只在措辞上有用 | redundant=1 exact=0 | PASS |
+| L10 | 冲突 | 同 select，一条要求 `present`、一条要求 `absent` | 同上 | 报 `conflicting` | conflicting=1 | PASS |
+| L11 | 拒收 | 同一个包里一条规则写了两遍 | `--rules l-dup.json --verify` | rc=2，报 `written twice` | rc=2 | PASS |
+
+L4 是这一节要证明的那句话：**描述 + 例子 → 规则文件 → 下一条命令就能审别人的脚本**，
+中间没有编译、没有训练、没有第二次生成。L5 是它的反面，同样重要：分不开的时候，
+工具不许给出一条永不触发的规则——它必须说「缺的是事实」，并把位置指向事实提供者。
+L8–L11 是「自动去重」的落地：完全重复**拒收**（会让同一个 subject 被报两次），
+包含与冲突**出声但不拒收**（可能是刻意的措辞或严重度差异），跨包同 id 也报，
+因为 finding 只带 id，两条规则共用一个 id 在输出里分不开。
 
 ## 已知约定核对
 

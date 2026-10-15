@@ -30,11 +30,14 @@ sys.path.insert(0, str(ROOT))
 from schemafence.agent import route, run_route_selftest          # noqa: E402
 from schemafence.checks_sql import (SQL_SAMPLE_DDL, check_sql,    # noqa: E402
                                     run_sql_selftest)
-from schemafence.ddl import parse_ddl                            # noqa: E402
+from schemafence.ddl import CHANGE_KINDS, parse_ddl               # noqa: E402
+from schemafence.facts import FACT_MODELS, PROVIDERS, rows_for    # noqa: E402
 from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.knowledge import (Chunk, Embedder, JsonStore,    # noqa: E402
                                    chunk_markdown, ingest_directory)
-from schemafence.rulepack import run_rulepack_selftest            # noqa: E402
+from schemafence.rulepack import (find_overlaps, infer_rule,      # noqa: E402
+                                  load_rulepack, run_rulepack_selftest,
+                                  vocabulary)
 from schemafence.tools import Toolbox, run_tool_selftest          # noqa: E402
 
 PY = sys.executable
@@ -801,6 +804,162 @@ def rulepack_cases() -> None:
           f"rc={p.returncode}")
 
 
+def inference_cases() -> None:
+    """From a description and its examples, to a rule that is ready to apply.
+
+    This is the claim that matters outside the repository: a rule someone writes
+    because they know the requirement — not because they can read the engine —
+    has to be usable the same day.  The cases below hold that claim at both ends:
+    the examples have to separate cleanly, and the rule that comes out has to
+    review a script on the next command line.
+    """
+    print("\n[L] inferred rules — a description, its examples, and a rule that applies")
+    request = str(ROOT / "examples" / "rule-request-primary-key.json")
+
+    # L0  the four spellings of one primary key are one fact
+    spellings = [
+        "CREATE TABLE shop.o (id BIGSERIAL PRIMARY KEY);",
+        "CREATE TABLE shop.o (id BIGSERIAL, PRIMARY KEY (id));",
+        "CREATE TABLE shop.o (id BIGSERIAL, CONSTRAINT pk_o PRIMARY KEY (id));",
+        "CREATE TABLE shop.o (id BIGSERIAL); ALTER TABLE shop.o ADD PRIMARY KEY (id);",
+    ]
+    key_fields = ("primary_key_columns", "has_primary_key", "unique_key_count")
+    rows = [rows_for("table", parse_ddl(sql))[0] for sql in spellings]
+    columns = [rows_for("column", parse_ddl(sql))[0] for sql in spellings]
+    # Not the whole row: the fourth script really does perform one more action, and
+    # change_count is right to say so.  What has to be identical is the fact the
+    # rule reads, and the column it reads it off.
+    same = all(all(row[k] == rows[0][k] for k in key_fields) for row in rows)
+    on_the_column = all((c["is_primary"], c["nullable"]) == (True, False)
+                        for c in columns)
+    check("L0", "one concept, one place: four spellings of a primary key read as one fact",
+          same and on_the_column and rows[0]["has_primary_key"] is True
+          and rows[0]["unique_key_count"] == 0,
+          f"identical={same} column={on_the_column} "
+          f"pk={rows[0]['primary_key_columns']} unique={rows[0]['unique_key_count']}")
+
+    # L1  every change kind the reader produces is a kind the vocabulary declares
+    sample = "\n".join(spellings + [
+        "ALTER TABLE shop.o DROP COLUMN channel;",
+        "ALTER TABLE shop.o ALTER COLUMN id SET NOT NULL;",
+        "ALTER TABLE shop.o RENAME TO shop.p;",
+        "ALTER TABLE shop.o SET (fillfactor = 70);",
+        "CREATE INDEX idx_o ON shop.o (id);", "DROP INDEX idx_o;",
+        "DROP TABLE shop.o;", "COMMENT ON TABLE shop.o IS 'x';",
+        "INSERT INTO shop.o (id) VALUES (1);", "GRANT SELECT ON shop.o TO r;",
+        "SET search_path = shop;", "CREATE OR REPLACE VIEW v AS SELECT 1;",
+    ])
+    produced = {c.kind for c in parse_ddl(sample).changes}
+    check("L1", "every change kind the reader produces is one the vocabulary declares",
+          produced <= set(CHANGE_KINDS) and len(produced) >= 10,
+          f"{len(produced)} kind(s), undeclared={sorted(produced - set(CHANGE_KINDS))}")
+
+    # L2  the search finds the rule the examples describe
+    out = infer_rule(json.loads(Path(request).read_text(encoding="utf-8")))
+    first = out["candidates"][0] if out["candidates"] else {}
+    check("L2", "the examples yield a candidate, and the plainest one is the fact "
+                "a DBA would have named",
+          first.get("assert") == [{"field": "has_primary_key", "op": "present"}]
+          and "select" not in first,
+          f"{len(out['candidates'])} candidate(s), first={first.get('assert')}")
+
+    # L3  what comes back is loadable, examples and all
+    pack = {"rulepack": "inferred", "version": 1, "applies_to": ["ddl"],
+            "rules": out["candidates"][:1]}
+    loaded = load_rulepack(pack, verify=True)
+    check("L3", "the candidate passes the example gate it will be held to anyway",
+          loaded["rules"][0]["examples"]["silent"] ==
+          json.loads(Path(request).read_text(encoding="utf-8"))["examples"]["silent"],
+          f"{len(loaded['rules'])} rule(s), examples carried over")
+
+    # L4  --write, then use the file on the next command line
+    written = TMP / "l-inferred.json"
+    p = review_cli(["--infer", request, "--limit", "1", "--write", str(written)])
+    colleague = TMP / "l-colleague.sql"
+    colleague.write_text("CREATE TABLE shop.orders (id BIGSERIAL, channel TEXT);\n"
+                         "CREATE TABLE shop.audit (id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ);\n",
+                         encoding="utf-8")
+    q = review_cli(["--rules", str(written), "--ddl", str(colleague)])
+    check("L4", "`--infer --write` leaves a pack that reviews a colleague's script "
+                "on the next command line",
+          p.returncode == 0 and written.exists() and q.returncode == 1
+          and "table-needs-a-primary-key" in q.stdout
+          and "shop.orders" in q.stdout and "shop.audit" not in q.stdout.split("[notes]")[0],
+          f"write rc={p.returncode} review rc={q.returncode}")
+
+    # L5  when the examples cannot be separated, say so instead of answering
+    impossible = TMP / "l-impossible.json"
+    impossible.write_text(json.dumps({
+        "id": "inherited-table", "severity": "low", "target": "table",
+        "title": "t", "detail": "d", "fix": "f",
+        "examples": {
+            "fires": ["CREATE TABLE shop.child (a INT) INHERITS (shop.parent);"],
+            "silent": ["CREATE TABLE shop.child (a INT);"],
+        }}), encoding="utf-8")
+    p = review_cli(["--infer", str(impossible)])
+    check("L5", "examples the current facts cannot separate exit 2, name the near "
+                "misses, and print no empty pack",
+          p.returncode == 2 and "no rule over the current facts" in p.stdout
+          and "separates 1 of 2" in p.stdout and '"rules": []' not in p.stdout,
+          f"rc={p.returncode}")
+
+    # L6  the fact models that are not built say why, and where
+    p = review_cli(["--facts"])
+    check("L6", "`--facts` names the unbuilt model and points at the change it needs",
+          p.returncode == 0 and "sql" in p.stdout and "not built" in p.stdout
+          and "roadmap" in p.stdout,
+          f"rc={p.returncode}")
+
+    # L7  the vocabulary is the registry, not a copy of it
+    vocab = vocabulary()
+    check("L7", "the exported vocabulary is built from the fact registry itself",
+          set(vocab["targets"]) == set(PROVIDERS)
+          and all(set(vocab["targets"][name]) == set(PROVIDERS[name].fields)
+                  for name in PROVIDERS)
+          and set(vocab["fact_models"]) == set(FACT_MODELS),
+          f"{len(PROVIDERS)} target(s), {len(FACT_MODELS)} model(s)")
+
+    # L8-L11  a pack that grows by copying is caught before it is applied
+    def overlaps(rules):
+        return find_overlaps({"rulepack": "x", "version": 1, "applies_to": ["ddl"],
+                              "rules": rules})
+
+    def rule(rid, select=None, op="present", field="comment"):
+        built = {"id": rid, "severity": "low", "target": "table", "title": "t",
+                 "detail": "d", "fix": "f", "assert": [{"field": field, "op": op}]}
+        if select:
+            built["select"] = select
+        return built
+
+    same = overlaps([rule("a"), rule("b")])
+    check("L8", "two rules that mean the same thing are named, not silently applied twice",
+          len(same["exact"]) == 1 and "`b`" in same["exact"][0]
+          and "`a`" in same["exact"][0],
+          f"exact={len(same['exact'])}")
+
+    inside = overlaps([rule("wide"), rule("narrow", select={"created_by_change": True})])
+    check("L9", "a rule that sits inside a wider one is reported as adding wording only",
+          not inside["exact"] and len(inside["redundant"]) == 1
+          and "`narrow` sits inside `wide`" in inside["redundant"][0],
+          f"redundant={len(inside['redundant'])} exact={len(inside['exact'])}")
+
+    clash = overlaps([rule("must"), rule("must-not", op="absent")])
+    check("L10", "two rules that select the same rows and disagree are reported",
+          len(clash["conflicting"]) == 1 and "disagree" in clash["conflicting"][0],
+          f"conflicting={len(clash['conflicting'])}")
+
+    dup = TMP / "l-dup.json"
+    pack = json.loads(Path(ROOT / "rules" / "table-hygiene.json").read_text(encoding="utf-8"))
+    pack["rulepack"] = "duplicated"
+    pack["rules"] = [pack["rules"][1],
+                     dict(pack["rules"][1], id="the-same-rule-again")]
+    dup.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    p = review_cli(["--rules", str(dup), "--verify"])
+    check("L11", "a pack with one rule written twice is refused at load",
+          p.returncode == 2 and "written twice" in p.stdout,
+          f"rc={p.returncode}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -814,6 +973,7 @@ def main() -> int:
     hermetic_cases()
     sql_semantics_cases()
     rulepack_cases()
+    inference_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)
