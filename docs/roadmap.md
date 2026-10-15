@@ -116,19 +116,20 @@ test a definition when it changes.
 
 ## Requested, and where each one lands
 
-Five things were asked for that the tables above do not yet cover, and two more
+Five things were asked for that the tables above do not yet cover, and three more
 came out of reviewing the code against them. Each one reads and reports. None of
 them executes, so none of them changes what this project is.
 
-| # | Asked for | Lands in | Missing today |
+| # | Asked for | Lands in | State |
 | --- | --- | --- | --- |
-| **R1** | a table with no primary key is a finding | `checks.py` | `ddl.py` records inline and table-level `PRIMARY KEY` already, for S1. The rule itself is not written. |
-| **R2** | one concept, one standard: naming, type, unit, enum | `checks.py`, then tier 4 | Today only check H (`Inconsistent naming for the same concept`, missing comments) and check 1 (near-duplicate names). |
+| **R1** | a table with no primary key is a finding | a rule pack | **done** — `rules/table-hygiene.json`, rule `table-must-have-primary-key` |
+| **R2** | one concept, one standard: naming, type, unit, enum | a rule pack, then tier 4 | partly. The comment rules shipped; naming, unit and enum still need rules, and today only check H and check 1 read naming. |
 | **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Tier 2 is its finished form. |
-| **R4** | a review rule is a description and its examples, not code | `checks.py`, and the rule file below | Every review rule is a Python function. `ddl.py` already carries the facts three of them need. |
+| **R4** | a review rule is a description and its examples, not code | `schemafence/rulepack.py`, `rules/*.json` | **done** — the vocabulary is below |
 | **R5** | the B-class errors, not only the A class | `checks_sql.py`, then tier 3 | S2, S4, S5, S6, and the counterexample tier. |
-| **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, `checks.py` | `ddl.py` reads `CREATE TABLE` and nothing else, so an `ALTER` script parses as zero tables, reports zero findings and exits zero. |
-| **R7** | the fence's rule set is configurable | `guard.py`, and the file below | The seven layers are code. |
+| **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, rule packs | **done** — `ALTER`, `DROP`, `CREATE INDEX`, `COMMENT ON`, DML and session statements are read as actions; every statement no reader claimed is listed by position, and a file that yields nothing at all exits 2 |
+| **R7** | the fence's rule set is configurable | `guard.py` | The seven layers are code. |
+| **R8** | a rule over the statement, not only over the schema | a SQL fact model | `checks_sql.py` has the facts it needs (the FROM chain, join keys, uniqueness) but does not expose them as rows, so every rule written so far reads DDL. |
 
 R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
 live connection is not a write connection, which is why the `--db` axis has
@@ -162,51 +163,100 @@ makes "who changed the fence" answerable.
 The rule set may not be fetched from a database or a service. A fence that
 depends on a row somebody can update is not a fence.
 
-### R4 — the review rule set
+### R4 — the review rule set, as built
 
-A review rule is a description plus the examples that prove it, in one file. The
-rule is a declaration over the parsed schema, not Python:
+A rule is a declaration over facts the engine already reads. Nothing in the file
+executes. There are three targets with a closed field list each, and this is the
+whole model:
 
-```yaml
-id: column-comment-cites-standard
-severity: medium
-scope: column
-assert:
-  comment_matches: "(?i)标准\\s*[:：]\\s*[A-Z]{2,}-\\d+"
-message: A column comment has to name the data standard it implements.
-fix: Add 标准：<ID> to the column comment.
-examples:
-  - silent: 'COMMENT ON COLUMN shop.orders.paid_at IS ''支付时间 标准：TS-004'''
-  - fires:  'COMMENT ON COLUMN shop.orders.paid_at IS ''支付时间'''
+**a rule selects rows, and says what those rows must satisfy. The findings are
+the selected rows that fail.**
+
+| Target | Fields |
+| --- | --- |
+| `table` | name, schema, qualified, comment, column_count, primary_key_columns, has_primary_key, unique_key_count, commented_columns, uncommented_columns, created_by_change, touched_by_change, change_count |
+| `column` | name, table, qualified, type, base_type, nullable, has_default, default, references, comment, is_primary, is_unique, looks_like_key, looks_like_money, looks_like_time, added_by_change, added_by |
+| `change` | kind, table, column, subject, detail, statement, position |
+
+Selectors, all ANDed: `field` (equals, and `null` means is null), `_in`,
+`_not_in`, `_matches`, `_not_matches`, `_matches_all`, `_present`, `_absent`.
+Assertions: `present`, `absent`, `equals`, `not_equals`, `in`, `not_in`,
+`matches`, `not_matches`, `matches_all`, `matches_none`, `gte`, `lte`. A rule
+over change actions takes `forbid` instead of an assertion — every selected row
+is a finding, which is how "this script drops a table" is written.
+
+```json
+{
+  "id": "column-comment-cites-standard",
+  "severity": "medium",
+  "target": "column",
+  "title": "Column comment does not cite the data standard",
+  "detail": "A comment that cites a standard can be checked against it.",
+  "fix": "Add 标准：<ID> to the column comment.",
+  "select": { "comment_present": true },
+  "assert": [{ "field": "comment", "op": "matches",
+               "value": "(?i)(标准|standard)\\s*[:：]\\s*[A-Z]{2,6}-\\d{1,4}" }],
+  "examples": {
+    "fires": ["CREATE TABLE t (a TIMESTAMPTZ); COMMENT ON COLUMN t.a IS '支付时间';"],
+    "silent": ["CREATE TABLE t (a TIMESTAMPTZ); COMMENT ON COLUMN t.a IS '支付时间 标准:TS-004';"]
+  }
+}
 ```
 
-The examples are not a prompt for a model. They are the acceptance test: a rule
-that cannot reproduce every label in its own file does not get committed, and
-the labels are the same bar the checks above are held to, one case that fires
-and one near miss that stays silent. That bar is why configurable does not decay
-into approximate.
+**The examples are not a prompt for a model. They are the acceptance test.** A
+rule that cannot reproduce every label in its own file is refused at load, by
+name, and is not applied — the same bar the hand-written checks are held to, one
+case that fires and one near miss that stays silent. The two packs in `rules/`
+ship with 24 examples between them, and either file is refused if one is wrong.
 
-The vocabulary stays closed on purpose: a selector over tables, columns or
-constraints, and assertions of presence, type, nullability, pattern, enumeration
-and reference. No loops, no user-defined functions, no code in the file. A rule
-set that can express anything cannot be reviewed by a person, and a rule set
-nobody can read is not evidence.
+The authoring loop, which is the reason "immediately usable" holds at all:
 
-Authoring may use a model. Execution never does: the model runs while the rule is
-being written, its proposal is shown as a diff, and the review path calls only
-the deterministic evaluator. This is the separation the two halves already rest
+```bash
+python -m schemafence.review --vocabulary > vocabulary.json   # the closed vocabulary
+# hand that file, the rule in words, and two examples to a model
+python -m schemafence.review --rules your-pack.json --verify  # refuses it if a label is wrong
+python -m schemafence.review --rules your-pack.json --ddl colleague.sql
+```
+
+The model runs while the rule is being written and never afterwards: the review
+path calls only the evaluator. That is the separation the two halves already rest
 on, one level up, because a rule is where a probabilistic step gets frozen into a
-deterministic one.
+deterministic one. `--vocabulary` is printed by the module that evaluates, so the
+instructions and the evaluator cannot drift apart.
 
-The facts have to exist before the rules over them do, and most of them already
-do. `ddl.py` records primary keys, `UNIQUE` constraints, table comments and
-column comments, which is why R1 and R2 are nearer than they look: what is
-missing is the rule, not the reader. Change actions are the exception, which is
-why R6 comes first.
+**The file is JSON, not YAML**, and the reason is the constraint above: this repo
+installs nothing, and JSON is the one strict format in the standard library.
+YAML's implicit typing (`no` becomes False, `1.0` becomes a float, a tab breaks
+the file) is a poor fit for something that decides pass or fail.
+
+Four rules keep the vocabulary from decaying into approximate:
+
+1. **A rule may not need a fact the engine does not already read.** The day it
+   does, the change is in the reader, not in the file — and that stays visible,
+   because the field name is refused at load instead of quietly never matching.
+   R8 is that boundary: a rule over the statement waits for an SQL fact model.
+2. **A rule that matched nothing says so, by name.** No matched rows means the
+   rule asserted nothing, which is not the same as a pass. The report prints
+   matched and fired per rule so the difference stays visible.
+3. **A script no reader understood exits 2, not 0.** `NOTHING RECOGNISED` with no
+   findings is not a clean review, and that exit code is why a pipeline cannot
+   read it as one.
+4. **An action list is still not an execution path.** A rule that forbids
+   `drop_column` reports it. Nothing in this layer runs a script.
+
+What changed between the first draft of this section and the built version is
+worth recording. The format moved from YAML to JSON. The fact list grew a third
+target once `ddl.py` learned to read change actions. And both rules that need a
+whole table were narrowed to `created_by_change: true` — the instructive one. An
+`ALTER`-only script names tables whose definitions the reader has never seen, so
+a check for a primary key fires on a table whose key simply is not in the file,
+and the finding is about the script rather than about the schema. The fact had to
+exist first; the report now names the tables it can only see in part instead of
+guessing about them.
 
 The five checks that already exist stay Python. The rule file layer is for what
-gets added, starting with R1 and R2; moving the old ones across is mechanical and
-can wait until the vocabulary stops moving.
+gets added — moving the old ones across is mechanical and can wait until the
+vocabulary stops moving.
 
 ## Prior art
 

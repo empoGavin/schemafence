@@ -21,15 +21,16 @@ answer and a write-capable connection in the same process with nothing in betwee
 | Nature         | probabilistic: a wrong answer is bad advice          | deterministic: a wrong decision damages data silently    |
 | Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | not possible, by design                                  |
 | Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 12 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
-| Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `checks.py` + `checks_sql.py` (reports) · `guard.py` (decides) |
+| Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `checks.py` + `checks_sql.py` + `rules/*.json` (reports) · `guard.py` (decides) |
 
 Two gates sit in that half, and they do not share an input set. **The reviewer**
-(`checks.py`, `checks_sql.py`) reads what is about to be deployed, either a schema or a statement
-plus a schema, and only reports. It can read a script that contains writes, because it runs
-nothing. **The fence** (`guard.py`) reads what is about to execute and decides; it only ever sees
-read-only statements, and it blocks DDL outright. So a change script never reaches `guard()`: a
-person reads the report and decides. The upstream is not only a model, either. A migration tool
-and a person write the same scripts, and the reviewer is the only entrance they pass through.
+(`checks.py`, `checks_sql.py`, and the rule packs under `rules/`) reads what is about to be
+deployed, either a schema or a statement plus a schema, and only reports. It can read a
+script that contains writes, because it runs nothing. **The fence** (`guard.py`) reads what is
+about to execute and decides; it only ever sees read-only statements, and it blocks DDL
+outright. So a change script never reaches `guard()`: a person reads the report and decides.
+The upstream is not only a model, either. A migration tool and a person write the same
+scripts, and the reviewer is the only entrance they pass through.
 
 The two halves meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
 the answer text and no further, and `guard()` alone decides whether a statement runs — so
@@ -62,6 +63,13 @@ Each finding prints a why and a fix; four selftest blocks close the run — 13 g
 7 tools, 12 sql-checks, each ending `N cases → all passed`. The `[tools]` one catches a bug the
 other tests cannot see: the relevance floor asked whether an embedder was attached, and
 `open_store` attaches one even offline, so the floor of 0.45 dropped every lexical hit (0.089–0.285).
+
+To review a script somebody else wrote, with the rules in the repo and nothing else installed:
+
+```bash
+python -m schemafence.review --rules rules/table-hygiene.json \
+       --rules rules/change-review.json --ddl examples/change_script_review.sql
+```
 
 ## Half one — the agent
 
@@ -137,10 +145,57 @@ The query runs and returns a plausible number — nothing raises an error, the r
 | 6   | **Runtime guardrails**            | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 
 Checks 1–4, S and the guardrails run with or without a database. Check 5 needs a live
-connection and is partly wired up. The reviewer reads a schema today, so a migration script
-parses as an empty schema and is reported clean with a zero exit code: the failure this project
-exists to catch, happening to it. That gap and the migration diff are both in
+connection and is partly wired up. The reviewer reads a script in two passes — the schema it
+leaves behind, and the actions it takes to get there — and its rule set is a file, so adding a
+rule does not mean editing the engine. The vocabulary and the tiers above it are in
 [`docs/roadmap.md`](docs/roadmap.md).
+
+### Reviewing somebody else's script
+
+A review rule is a JSON file: a selector over facts the reader already produces, an assertion,
+and the examples that prove it. `load_rulepack` runs those examples first and refuses the file
+if any label is wrong, which is what makes a rule safe to add without a code change.
+
+```bash
+python -m schemafence.review --vocabulary > vocabulary.json   # the closed vocabulary
+python -m schemafence.review --rules rules/table-hygiene.json --verify
+python -m schemafence.review --rules rules/table-hygiene.json \
+       --rules rules/change-review.json --ddl examples/change_script_review.sql
+```
+
+```
+schemafence review — a rule pack, and a script somebody else wrote
+======================================================================
+rules  : table-hygiene            (5 rules, 14 examples verified)   table-hygiene.json
+rules  : change-review            (3 rules, 10 examples verified)   change-review.json
+script : change_script_review.sql
+read   : 9 statement(s) → 3 table(s), 5 column(s), 9 change action(s)
+
+what each rule looked at
+──────────────────────────────────────────────────────────────────────
+  rule                                        target  matched  fired
+  table-must-have-primary-key                 table         1      1
+  table-must-have-comment                     table         1      0
+  table-comment-states-role                   table         1      1
+  column-must-have-comment                    column        5      4
+  column-comment-cites-standard               column        1      0
+  no-drop-table                               change        1      1
+  no-drop-column                              change        1      1
+  new-not-null-column-needs-a-default         column        1      1
+
+  a rule that matched nothing asserted nothing. That is visible here
+  rather than folded into a total, because zero is not a pass.
+...
+[verdict]
+  9 finding(s), worst high — the script does not pass these rules.
+  a person reads this and decides. This layer reviews; it never executes.
+```
+
+The two `...` gaps are mine; everything else is the run above, verbatim. The exit code is the
+part that matters in a pipeline: **0** read and clean, **1** read and at least one rule fired,
+**2** could not review — a pack that failed its own examples, or a file where the reader
+recognised nothing at all. The third code exists so that "0 finding(s)" can never be printed
+over a file nobody understood.
 
 Check S is the one worth explaining. `checks.py` reads the schema and never sees a statement;
 `guard.py` reads the statement and never sees a schema. A fan-out and a cancelled `LEFT JOIN`
@@ -150,11 +205,14 @@ runs — its rules, its abstentions and the tiers above it are in
 [`docs/roadmap.md`](docs/roadmap.md). As a library:
 
 ```python
-from schemafence import check_sql, guard, parse_ddl
+from schemafence import check_sql, guard, load_rulepack, parse_ddl, review_ddl
 schema = parse_ddl(open("examples/sample_schema.sql").read())
 sql = "SELECT SUM(o.amount) FROM shop.orders o JOIN shop.refunds r ON o.id = r.order_id"
 print([f.subject for f in check_sql(schema, sql).findings])   # ['SUM(o.amount)  x  shop.refunds']
 print(guard("SELECT * FROM shop.orders; DROP TABLE shop.users").layer)   # L1
+
+pack = load_rulepack("rules/table-hygiene.json")   # refused if its own examples do not hold
+print(len(review_ddl([pack], open("colleague.sql").read()).findings))
 ```
 
 With a live database (optional): `bash scripts/setup_pg.sh` covers the `apt` and `dnf` families,
@@ -173,17 +231,19 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 
 **Early. The offline path runs end to end; live mode is partly wired up.** Done: checks 1–4 and
 hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
-catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, and 97
-offline QA cases. Not done: reviewing a change script by its actions, and the migration diff.
+catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, the
+change-action reader, 8 rules in two shipped rule packs, and 107 offline QA cases. Not done: the
+migration diff, rules over the statement rather than the schema, and S2/S4/S5/S6.
 
 ## Known limitations
 
 - **Both readers are hand-written, and both stop where they stop.** The DDL reader assumes
-  one column definition per line, and reads `CREATE TABLE` only, so a migration script parses as
-  empty and reviews clean; the SQL-side checks read a single query level and abstain,
-  with a note, on anything nested, unparsable or ambiguous. Production should parse with
-  `sqlglot` or `pg_query`; it is dependency-free on purpose, so `python demo.py` runs on a
-  fresh clone with no install.
+  one column definition per line, reads a closed set of statement kinds, and copies a
+  dollar-quoted body whole without parsing it: every statement it does not claim is listed by
+  position, and a file where it claims nothing exits 2 rather than reporting zero findings. The
+  SQL-side checks read a single query level and abstain, with a note, on anything nested,
+  unparsable or ambiguous. Production should parse with `sqlglot` or `pg_query`; it is
+  dependency-free on purpose, so `python demo.py` runs on a fresh clone with no install.
 - **The offline embedding is lexical, not semantic**, and its scores are not comparable
   with an API model's (0.089–0.285 against 0.5–0.7). 97.7% over 40 chunks proves the
   plumbing works, not that retrieval is good.
