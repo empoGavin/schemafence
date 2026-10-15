@@ -205,11 +205,11 @@ python -m schemafence.review --infer examples/rule-request-primary-key.json --li
 schemafence infer — from your examples, the rule that separates them
 ======================================================================
 request: rule-request-primary-key.json  →  target table, 2 fires, 5 silent
-searched: 1242 selection/assertion pair(s) over the closed vocabulary
+searched: 1508 selection/assertion pair(s) over the closed vocabulary
 
   1. assert [{"field": "has_primary_key", "op": "present"}]
      select {}
-  2. assert [{"field": "primary_key_columns", "op": "present"}]
+  2. assert [{"field": "index_count", "op": "gte", "value": 1}]
      select {}
 
   closest rules that do not separate everything:
@@ -218,6 +218,10 @@ searched: 1242 selection/assertion pair(s) over the closed vocabulary
     · [{"field": "column_count", "op": "lte", "value": 2}]
       separates 6 of 7 example(s)
 ```
+
+The second candidate is the same five examples read a different way — a table with no index at
+all — and it separates them only by coincidence. The rank puts the plainest rule first; the file is
+then read by a person, which is why the order matters and the search does not decide anything.
 
 `--write` puts the first candidate on disk, and only after it has passed the example gate every
 pack is held to:
@@ -256,6 +260,65 @@ part that matters in a pipeline: **0** read and clean, **1** read and at least o
 recognised nothing at all. The third code exists so that "0 finding(s)" can never be printed
 over a file nobody understood.
 
+### A rule that needs the live database
+
+Not every rule can be answered from a script, and the one a DBA asks for first is one that
+cannot: **no table may carry two indexes on the same columns, in the same order.** A script knows
+the indexes it creates; whether the table already has that index is a fact about the database. The
+pack says so in its first three lines, and a run that did not read a catalog is refused rather than
+reported clean:
+
+```bash
+python -m schemafence.review --rules rules/index-hygiene.json --ddl colleague.sql
+```
+
+```
+rules  : index-hygiene            (1 rule, 5 examples verified)   index-hygiene.json
+script : colleague.sql
+read   : 2 statement(s) → 1 table(s), 1 column(s), 2 change action(s)
+
+what each rule looked at
+──────────────────────────────────────────────────────────────────────
+  no rule was applied. The packs are listed above and the notes
+  below say why; nothing here cleared anything.
+
+[notes]
+──────────────────────────────────────────────────────────────────────
+  · index-hygiene: `index-hygiene` WAS NOT APPLIED — it declares applies_to ['catalog'] and these
+    facts were read from `ddl`: these facts came from a script, which knows only the statements it
+    contains. What a table already holds is in the catalog: read it with `--db <dsn>`
+
+[verdict]
+──────────────────────────────────────────────────────────────────────
+  could not review with 1 pack(s) not applied: `index-hygiene`
+  a pack that was not applied has not cleared anything. Each note above
+  names the facts it asked for, and the command that would supply them.
+```
+
+The note is one line in the run; it is wrapped here. Reading the catalog is a read, so it stays on
+this side of the line the project is built around — the same `--db` axis the rest of live mode
+uses, and no write path anywhere near it. And it answers the question a reviewer actually has,
+which is about the state *after* the migration: the catalog holds the indexes already on the
+table, the script holds the one about to be added, and neither knows both.
+
+```bash
+python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql
+```
+
+Where the *list* of spellings comes from is a third question, and the corpus is where it was
+answered: every way of writing an index or a key that the PostgreSQL manual documents — on the
+column, in the table body, as a named constraint, by `ALTER TABLE`, by `CREATE UNIQUE INDEX` —
+became a case in the test file, and the reader has to read all of them as one fact. Documentation
+produced **tests**; it never touches the execution path, because retrieval is probabilistic and
+this layer is not allowed to be. That division is the whole design, one level down: a fact has one
+shape, however it was written, and a rule names the shape.
+
+**Status of that read:** the `pg_index` query behind `--db` here is new and has not yet been run
+against a server — the last step in the VM quickstart. What is checked offline is the part that
+decides: the same eighteen fields are built from catalog rows and from a script, field for field,
+in `tests/qa_probe.py` M1, so a rule cannot tell which of the two it is reading. Run
+`python -m schemafence.review --db "$PG_DSN"` on the VM to close that gap.
+
 Check S is the one worth explaining. `checks.py` reads the schema and never sees a statement;
 `guard.py` reads the statement and never sees a schema. A fan-out and a cancelled `LEFT JOIN`
 are valid on both sides and only visible where the two meet, so neither can go into the layer
@@ -291,10 +354,11 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 **Early. The offline path runs end to end; live mode is partly wired up.** Done: checks 1–4 and
 hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
 catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, the
-change-action reader, 8 rules in two shipped rule packs, and 119 offline QA cases. Rules are
+change-action reader, 9 rules in three shipped rule packs, and 129 offline QA cases. Rules are
 files: a pack is verified against its own examples when it loads, a rule can be searched for from
-a description and two scripts (`--infer`), and a pack that repeats or contradicts itself is caught
-before it is applied. Not done: the migration diff, rules over the statement rather than the
+a description and two scripts (`--infer`), a pack that repeats or contradicts itself is caught
+before it is applied, and a pack that needs facts from the live catalog is refused over a script
+instead of reported clean. Not done: the migration diff, rules over the statement rather than the
 schema, and S2/S4/S5/S6.
 
 ## Known limitations
@@ -318,6 +382,13 @@ schema, and S2/S4/S5/S6.
 - **Corpora are searched one directory at a time.** IDF is computed over the corpus that was
   ingested, so mixing two packs in one store moves the hit rate silently. Check 5 is not in
   the report yet, the planner is keyword-based on purpose, and the live path is PostgreSQL only.
+- **A duplicate index is exact, not approximate.** Two indexes are the same when the columns match
+  in order, the method matches and neither is weaker than the other; an index on `(a)` is *not*
+  reported as covered by one on `(a, b)`, though a btree on `(a, b)` serves it. And the two readers
+  compare differently by design: a script that creates an index and a catalog that already has one
+  are two fact models, and a review reads one of them — the one exception is the indexes a script
+  under review adds, which are carried onto the catalog facts because that is the state the
+  migration leaves behind.
 
 ## Why I built this
 

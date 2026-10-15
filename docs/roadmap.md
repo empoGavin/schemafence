@@ -116,7 +116,7 @@ test a definition when it changes.
 
 ## Requested, and where each one lands
 
-Five things were asked for that the tables above do not yet cover, and three more
+Six things were asked for that the tables above do not yet cover, and three more
 came out of reviewing the code against them. Each one reads and reports. None of
 them executes, so none of them changes what this project is.
 
@@ -130,6 +130,7 @@ them executes, so none of them changes what this project is.
 | **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, rule packs | **done** — `ALTER`, `DROP`, `CREATE INDEX`, `COMMENT ON`, DML and session statements are read as actions; every statement no reader claimed is listed by position; a change kind the vocabulary does not declare is reported rather than silently produced; and a file that yields nothing at all exits 2. The same pass collapsed the four spellings of one primary key into one fact, which is what let the rule cover all of them |
 | **R7** | the fence's rule set is configurable | `guard.py` | The seven layers are code. |
 | **R8** | a rule over the statement, not only over the schema | a SQL fact model | `checks_sql.py` has the facts it needs (the FROM chain, join keys, uniqueness) but does not expose them as rows, so every rule written so far reads DDL. |
+| **R9** | a rule that needs what the database already holds | a `catalog` fact model, `pg_index` | **done** — `rules/index-hygiene.json` refuses a script and asks for `--db`; the row shape is held identical to the script reader's by `tests/qa_probe.py` M1. The query itself has not been run against a server yet. |
 
 R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
 live connection is not a write connection, which is why the `--db` axis has
@@ -166,7 +167,7 @@ depends on a row somebody can update is not a fence.
 ### R4 — the review rule set, as built
 
 A rule is a declaration over facts the engine already reads. Nothing in the file
-executes. There are three targets with a closed field list each, and this is the
+executes. There are four targets with a closed field list each, and this is the
 whole model:
 
 **a rule selects rows, and says what those rows must satisfy. The findings are
@@ -174,8 +175,9 @@ the selected rows that fail.**
 
 | Target | Fields |
 | --- | --- |
-| `table` | name, schema, qualified, comment, column_count, primary_key_columns, has_primary_key, unique_key_count, commented_columns, uncommented_columns, created_by_change, touched_by_change, change_count |
+| `table` | name, schema, qualified, comment, column_count, primary_key_columns, has_primary_key, unique_key_count, index_count, commented_columns, uncommented_columns, created_by_change, touched_by_change, change_count |
 | `column` | name, table, qualified, type, base_type, nullable, has_default, default, references, comment, is_primary, is_unique, looks_like_key, looks_like_money, looks_like_time, added_by_change, added_by |
+| `index` | name, table, qualified, columns, columns_text, column_count, unique, primary, from_constraint, method, expression, partial, predicate, comparable, created_here, duplicate_count, duplicate_of |
 | `change` | kind, table, column, subject, detail, statement, position |
 
 Selectors, all ANDed: `field` (equals, and `null` means is null), `_in`,
@@ -184,6 +186,9 @@ Assertions: `present`, `absent`, `equals`, `not_equals`, `in`, `not_in`,
 `matches`, `not_matches`, `matches_all`, `matches_none`, `gte`, `lte`. A rule
 over change actions takes `forbid` instead of an assertion — every selected row
 is a finding, which is how "this script drops a table" is written.
+
+`title`, `detail` and `fix` may name a field of the failing row as `{field}`,
+which is how a finding can say *which* other index it collides with.
 
 ```json
 {
@@ -206,8 +211,8 @@ is a finding, which is how "this script drops a table" is written.
 **The examples are not a prompt for a model. They are the acceptance test.** A
 rule that cannot reproduce every label in its own file is refused at load, by
 name, and is not applied — the same bar the hand-written checks are held to, one
-case that fires and one near miss that stays silent. The two packs in `rules/`
-ship with 24 examples between them, and either file is refused if one is wrong.
+case that fires and one near miss that stays silent. The three packs in `rules/`
+ship with 29 examples between them, and any file is refused if one is wrong.
 
 The authoring loop, which is the reason "immediately usable" holds at all:
 
@@ -278,12 +283,35 @@ one level down.
 
 `rulepack.py` does not know what DDL is. It asks `schemafence/facts.py` for rows
 with named fields, and a provider declares three things: the fields it offers, the
-fact models it can be read from, and how to turn one into rows. Three providers are
-registered — `table`, `column`, `change` — and R8 is a fourth.
+fact models it can be read from, and how to turn one into rows. Four providers are
+registered — `table`, `column`, `index`, `change` — and R8 is a fifth.
 
 This is the whole reason a rule can be added without touching the engine, and it is
 also why the vocabulary cannot drift from the evaluator: `--vocabulary` and
 `--facts` are both built from the registry that applies the rules.
+
+### Where the facts come from, and what may not
+
+A fact has one shape and three ways to arrive. That is the answer to "add a rule
+about primary keys and it should find every way somebody writes one":
+
+| Source | Supplies | Why it is safe |
+| --- | --- | --- |
+| the script under review | tables, columns, keys, indexes, change actions | a parser, deterministic and offline |
+| the live catalog | the same fields, read from `pg_catalog` | a read; the `--db` axis has never been the write axis |
+| the corpus | **the list of spellings**, as test cases | documentation read once by a person, then compiled into `tests/qa_probe.py` |
+
+The third row is the one worth stating plainly. Retrieval is probabilistic and the
+review layer is not allowed to be, so the manual is not consulted at review time: it
+is where the list of spellings came from, and the list became cases the reader has
+to pass. Four spellings of a primary key, five of an index, and the assembler's own
+question — "is this index already there?" — answered from the catalog, because a
+script cannot know what the table holds.
+
+Which means `applies_to` is enforced rather than documented. A pack that declares
+`["catalog"]` and is handed a script is **not applied**: the run says so, says which
+command would supply the facts, and exits 2. A rule that could not be evaluated has
+not cleared anything, and that has to be visible in the same place a pass is.
 
 ### Inference, and what it refuses to do
 
