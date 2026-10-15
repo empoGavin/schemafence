@@ -119,7 +119,7 @@ def _clause_body(clean: str, depth: list[int], keyword: str) -> str:
     for i, m in enumerate(found):
         if not m.group(1).upper().startswith(keyword):
             continue
-        stop = found[i + 1].start if i + 1 < len(found) else len(clean)
+        stop = found[i + 1].start() if i + 1 < len(found) else len(clean)
         return clean[m.end(): stop]
     return ""
 
@@ -375,6 +375,17 @@ SQL_CASES: list[tuple[str, str, tuple[str, ...]]] = [
     ("the anti-join idiom: IS NULL is what a LEFT JOIN is for",
      "SELECT o.id FROM shop.orders o "
      "LEFT JOIN shop.refunds r ON o.id = r.order_id WHERE r.id IS NULL",
+     ()),
+    ("the same S3 shape, with GROUP BY after the WHERE clause",
+     "SELECT o.id FROM shop.orders o "
+     "LEFT JOIN shop.refunds r ON o.id = r.order_id "
+     "WHERE r.refund_amount > 0 GROUP BY o.id",
+     ("S3",)),
+    ("a WHERE clause that is not the last one: ORDER BY follows",
+     "SELECT o.id FROM shop.orders o WHERE o.status = 'paid' ORDER BY o.id",
+     ()),
+    ("a WHERE clause that is not the last one: LIMIT follows",
+     "SELECT o.id FROM shop.orders o WHERE o.status = 'paid' LIMIT 10",
      ()),
     ("a measure from the side that multiplies: nothing is inflated",
      "SELECT SUM(oi.line_amount) FROM shop.orders o "

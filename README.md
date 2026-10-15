@@ -17,7 +17,7 @@ answer and a write-capable connection in the same process with nothing in betwee
 | Decides by     | retrieval, tool evidence, optionally a model        | fixed rules, no model and no retrieval                   |
 | Nature         | probabilistic: a wrong answer is bad advice          | deterministic: a wrong decision damages data silently    |
 | Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | not possible, by design                                  |
-| Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 9 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
+| Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 12 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
 | Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `schemafence/guard.py`                                   |
 
 They meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
@@ -45,7 +45,7 @@ source : sample_schema.sql      tables : 7      columns : 33
 ```
 
 Each finding prints a why and a fix; four selftest blocks close the run — 13 guard, 10 router,
-7 tools, 9 sql-checks, each ending `N cases → all passed`. The `[tools]` one catches a bug the
+7 tools, 12 sql-checks, each ending `N cases → all passed`. The `[tools]` one catches a bug the
 other tests cannot see: the relevance floor asked whether an embedder was attached, and
 `open_store` attaches one even offline, so the floor of 0.45 dropped every lexical hit (0.089–0.285).
 

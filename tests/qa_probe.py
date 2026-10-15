@@ -53,6 +53,21 @@ def check(cid: str, desc: str, ok: bool, detail: str = "") -> None:
     print(f"  {mark}  {cid:<4} {desc}" + (f"   [{detail}]" if detail else ""))
 
 
+def selftest_check(cid: str, desc: str, run) -> None:
+    """Run a built-in selftest as one case.  A raise becomes a FAIL line.
+
+    An exception here used to end the process, and the summary that names the
+    failing cases is printed at the very end, so a crashing unit erased the
+    diagnosis it was supposed to produce.
+    """
+    try:
+        rows, ok = run()
+    except Exception as exc:
+        check(cid, desc, False, f"{type(exc).__name__}: {exc}")
+        return
+    check(cid, desc, ok, f"{len(rows)} cases")
+
+
 def child_env(extra: dict | None = None) -> dict:
     """The environment every child process here runs under.
 
@@ -93,8 +108,7 @@ def cli(args, env=None, timeout=None):
 # --------------------------------------------------------------------------- #
 def guard_cases() -> None:
     print("\n[A] guard — seven layers + bypasses")
-    rows, ok = run_selftest()
-    check("A0", "run_selftest() 13 built-in cases all pass", ok)
+    selftest_check("A0", "run_selftest() 13 built-in cases all pass", run_selftest)
 
     def blocked(sql, layer):
         r = guard(sql)
@@ -161,8 +175,7 @@ def guard_cases() -> None:
 # --------------------------------------------------------------------------- #
 def route_cases() -> None:
     print("\n[B] router — write intent vs practice question")
-    rows, ok = run_route_selftest()
-    check("B0", "run_route_selftest() 10 cases all pass", ok)
+    selftest_check("B0", "run_route_selftest() 10 cases all pass", run_route_selftest)
 
     def first(q):
         calls, reasons = route(q)
@@ -379,8 +392,7 @@ def cli_cases() -> None:
 # --------------------------------------------------------------------------- #
 def tool_cases() -> None:
     print("\n[E] tools — selftest, explain, search_path, dispatch")
-    rows, ok = run_tool_selftest()
-    check("E0", "run_tool_selftest() 7 cases all pass", ok)
+    selftest_check("E0", "run_tool_selftest() 7 cases all pass", run_tool_selftest)
 
     class FakeCur:
         def __init__(self, log):
@@ -607,8 +619,7 @@ def sql_semantics_cases() -> None:
     and the two abstentions that must produce a note instead of a guess.
     """
     print("\n[J] sql-checks — the schema and the statement, read together")
-    rows, ok = run_sql_selftest()
-    check("J0", "run_sql_selftest() 9 cases all pass", ok)
+    selftest_check("J0", "run_sql_selftest() 12 cases all pass", run_sql_selftest)
 
     schema = parse_ddl(SQL_SAMPLE_DDL)
 
@@ -675,7 +686,9 @@ def sql_semantics_cases() -> None:
                        cwd=str(ROOT), env=child_env(), timeout=120)
     check("J10", "demo.py runs the block and exits 0",
           p.returncode == 0 and "[sql-checks]" in p.stdout
-          and "9 cases → all passed" in p.stdout, f"rc={p.returncode}")
+          and "12 cases → all passed" in p.stdout,
+          f"rc={p.returncode} block={'yes' if '[sql-checks]' in p.stdout else 'no'} "
+          f"count={'yes' if '12 cases → all passed' in p.stdout else 'no'}")
 
 
 def main() -> int:
