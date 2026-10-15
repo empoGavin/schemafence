@@ -3,11 +3,20 @@
 [![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
 
 > A read-only database agent plus the deterministic layer in front of it. It answers from a DBA
-> knowledge base, reads a live instance for facts, reviews a schema and a statement for the errors
-> that raise nothing, and every statement passes through a fence before it runs.
+> knowledge base, reads a live instance for the facts a script cannot state, reviews a schema and
+> a statement for the errors that raise nothing, and every statement passes through a fence before
+> it runs.
 >
-> 一个只读的数据库助手，加上它前面那层确定性的东西：答问靠知识库，事实靠活库，
-> 找「不报错却算错」的地方靠静态审核，放不放行只由一道闸门决定。
+> Its review rules are files rather than code, and a file can be written from a description: the
+> exported vocabulary goes to a model, or the sentence and two example scripts go to `--infer`.
+> Either way the rule is applied with no model in the loop, and it has to pass its own examples
+> first.
+>
+> 一个只读的数据库助手，加上它前面那层确定性的东西：答问靠知识库，事实靠活库补脚本答不出的
+> 那些，找「不报错却算错」的地方靠静态审核，放不放行只由一道闸门决定。
+>
+> 审核规则是文件不是代码，而且能由一句描述生成：把导出的词表交给模型，或者把描述和两个例子
+> 交给 `--infer`。两种方式产出的规则应用时都不需要模型，且必须先过自己的用例门禁。
 
 ## Two halves, and one rule about how they meet
 
@@ -19,7 +28,7 @@ answer and a write-capable connection in the same process with nothing in betwee
 | Answers        | "orders 表为什么这么慢？" · "idle in transaction 有什么后果？" | **the reviewer** "数字对不对？" · **the fence** "允许执行吗？"     |
 | Decides by     | retrieval, tool evidence, optionally a model        | fixed rules, no model and no retrieval                   |
 | Nature         | probabilistic: a wrong answer is bad advice          | deterministic: a wrong decision damages data silently    |
-| Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | not possible, by design                                  |
+| Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | **the reviewer**: rules are files, and more can be added · **the fence**: its thresholds are configuration, its decision logic is not |
 | Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 12 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
 | Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `checks.py` + `checks_sql.py` + `rules/*.json` (reports) · `guard.py` (decides) |
 
@@ -154,7 +163,9 @@ rule does not mean editing the engine. The vocabulary and the tiers above it are
 
 A review rule is a JSON file: a selector over facts the reader already produces, an assertion,
 and the examples that prove it. `load_rulepack` runs those examples first and refuses the file
-if any label is wrong, which is what makes a rule safe to add without a code change.
+if any label is wrong, which is what makes a rule safe to add without a code change. It can be
+written by hand against the exported vocabulary, or found from a description and two examples —
+that second route is the next section.
 
 ```bash
 python -m schemafence.review --vocabulary > vocabulary.json   # the closed vocabulary
