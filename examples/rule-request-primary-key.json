@@ -1,0 +1,21 @@
+{
+  "id": "table-needs-a-primary-key",
+  "severity": "high",
+  "target": "table",
+  "title": "A table created without a primary key",
+  "detail": "Without a key a row cannot be addressed, so it cannot be updated, de-duplicated or replicated safely.",
+  "fix": "Add PRIMARY KEY, on the column or as a table constraint.",
+  "examples": {
+    "fires": [
+      "CREATE TABLE shop.orders (id BIGSERIAL, channel TEXT);",
+      "CREATE TABLE shop.audit (id BIGSERIAL, at TIMESTAMPTZ, actor TEXT);"
+    ],
+    "silent": [
+      "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, channel TEXT);",
+      "CREATE TABLE shop.orders (id BIGSERIAL, PRIMARY KEY (id));",
+      "CREATE TABLE shop.orders (id BIGSERIAL, CONSTRAINT pk_orders PRIMARY KEY (id));",
+      "CREATE TABLE shop.orders (id BIGSERIAL); ALTER TABLE shop.orders ADD PRIMARY KEY (id);",
+      "CREATE TABLE shop.orders (id BIGSERIAL, CONSTRAINT pk_orders PRIMARY KEY (id, channel));"
+    ]
+  }
+}
