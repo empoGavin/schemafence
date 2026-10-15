@@ -18,10 +18,9 @@
 > Every statement the agent runs passes one fence first, that fence is read-only, and no model
 > decides whether a statement may run.
 >
-> Its review rules are files rather than code, and a file can be written from a description: the
-> exported vocabulary goes to a model, or the sentence and two example scripts go to `--infer`.
-> Either way the rule is applied with no model in the loop, and it has to pass its own examples
-> first.
+> A review rule is added by description: say what you want checked in plain words, give two
+> examples, and it is a rule you can use. No code change, no model when the rule runs, and the
+> rule has to pass its own examples first.
 >
 > 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
 > 的问题、诊断一套活库。
@@ -35,8 +34,8 @@
 >
 > 助手执行的每条语句先过同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
 >
-> 审核规则是文件不是代码，而且能由一句描述生成：把导出的词表交给模型，或者把描述和两个例子
-> 交给 `--infer`。两种方式产出的规则应用时都不需要模型，且必须先过自己的用例门禁。
+> 脚本审核的规则能自己加：用自然语言说清你要审什么、再给两个例子，它就是一条能用的规则，不用改
+> 代码。用规则时不过模型，规则本身先过自己的用例门禁。
 
 ## Two halves, and one rule about how they meet
 
@@ -178,11 +177,11 @@ rule does not mean editing the engine. The vocabulary and the tiers above it are
 
 ### Reviewing somebody else's script
 
-A review rule is a JSON file: a selector over facts the reader already produces, an assertion,
-and the examples that prove it. `load_rulepack` runs those examples first and refuses the file
-if any label is wrong, which is what makes a rule safe to add without a code change. It can be
-written by hand against the exported vocabulary, or found from a description and two examples —
-that second route is the next section.
+A review rule says which facts to look at and what they must hold, and it carries the examples
+that prove it. `load_rulepack` runs those examples first and refuses the file if any label is
+wrong, which is what makes a rule safe to add without a code change. Write one by hand against
+the exported vocabulary, or describe what you want and give two example scripts — that second
+route is the next section.
 
 ```bash
 python -m schemafence.review --vocabulary > vocabulary.json   # the closed vocabulary
