@@ -191,6 +191,65 @@ what each rule looked at
   a person reads this and decides. This layer reviews; it never executes.
 ```
 
+### From your examples to a rule
+
+The vocabulary is what you hand a model, but a rule usually starts as a sentence and a few
+scripts. `--infer` searches that same closed vocabulary for the rule that separates them, with no
+model in the loop at all:
+
+```bash
+python -m schemafence.review --infer examples/rule-request-primary-key.json --limit 2
+```
+
+```
+schemafence infer — from your examples, the rule that separates them
+======================================================================
+request: rule-request-primary-key.json  →  target table, 2 fires, 5 silent
+searched: 1242 selection/assertion pair(s) over the closed vocabulary
+
+  1. assert [{"field": "has_primary_key", "op": "present"}]
+     select {}
+  2. assert [{"field": "primary_key_columns", "op": "present"}]
+     select {}
+
+  closest rules that do not separate everything:
+    · [{"field": "column_count", "op": "lte", "value": 1}]
+      separates 6 of 7 example(s)
+    · [{"field": "column_count", "op": "lte", "value": 2}]
+      separates 6 of 7 example(s)
+```
+
+`--write` puts the first candidate on disk, and only after it has passed the example gate every
+pack is held to:
+
+```bash
+python -m schemafence.review --infer examples/rule-request-primary-key.json --limit 1 \
+       --write primary-key.json
+python -m schemafence.review --rules primary-key.json --ddl colleague.sql   # already usable
+```
+
+The five silent examples are the point. They are one requirement written four ways — `PRIMARY KEY`
+on the column, as a table constraint, as a named constraint, and added by a later `ALTER TABLE` —
+and one rule covers all four only because the reader has already collapsed them into a single
+fact. That collapse is the reader's job and never the rule's: a rule asks whether a table has a
+primary key, not how somebody spelled it.
+
+When the examples cannot be separated at all, the answer is the near misses and exit 2, not a rule
+that would never fire:
+
+```
+  no rule over the current facts separates these examples.
+
+  closest rules that do not separate everything:
+    · [{"field": "created_by_change", "op": "present"}]
+      separates 1 of 2 example(s)
+    · [{"field": "has_primary_key", "op": "present"}]
+      separates 1 of 2 example(s)
+```
+
+That is the honest form of "this needs a fact the reader does not collect yet", and it points at
+the fact provider rather than at the rule file.
+
 The two `...` gaps are mine; everything else is the run above, verbatim. The exit code is the
 part that matters in a pipeline: **0** read and clean, **1** read and at least one rule fired,
 **2** could not review — a pack that failed its own examples, or a file where the reader
@@ -232,8 +291,11 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 **Early. The offline path runs end to end; live mode is partly wired up.** Done: checks 1–4 and
 hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
 catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, the
-change-action reader, 8 rules in two shipped rule packs, and 107 offline QA cases. Not done: the
-migration diff, rules over the statement rather than the schema, and S2/S4/S5/S6.
+change-action reader, 8 rules in two shipped rule packs, and 119 offline QA cases. Rules are
+files: a pack is verified against its own examples when it loads, a rule can be searched for from
+a description and two scripts (`--infer`), and a pack that repeats or contradicts itself is caught
+before it is applied. Not done: the migration diff, rules over the statement rather than the
+schema, and S2/S4/S5/S6.
 
 ## Known limitations
 
@@ -247,6 +309,10 @@ migration diff, rules over the statement rather than the schema, and S2/S4/S5/S6
 - **The offline embedding is lexical, not semantic**, and its scores are not comparable
   with an API model's (0.089–0.285 against 0.5–0.7). 97.7% over 40 chunks proves the
   plumbing works, not that retrieval is good.
+- **A rule file configures the reviewer, not the fence.** What a pack may change is the layer
+  that reads and reports. The seven guardrail layers decide, and they stay code: a fence a committed
+  JSON can switch off is not a fence. Its table whitelist and row cap are configuration, its
+  decision logic is not — R7 in [`docs/roadmap.md`](docs/roadmap.md).
 - **The eval harness is a ruler under revision.** Each question accepts a set of sources (`甲 / 乙`),
   but it is still one rank against that set, so read the per-question table before the headline.
 - **Corpora are searched one directory at a time.** IDF is computed over the corpus that was

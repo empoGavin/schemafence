@@ -125,9 +125,9 @@ them executes, so none of them changes what this project is.
 | **R1** | a table with no primary key is a finding | a rule pack | **done** — `rules/table-hygiene.json`, rule `table-must-have-primary-key` |
 | **R2** | one concept, one standard: naming, type, unit, enum | a rule pack, then tier 4 | partly. The comment rules shipped; naming, unit and enum still need rules, and today only check H and check 1 read naming. |
 | **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Tier 2 is its finished form. |
-| **R4** | a review rule is a description and its examples, not code | `schemafence/rulepack.py`, `rules/*.json` | **done** — the vocabulary is below |
+| **R4** | a review rule is a description and its examples, not code | `schemafence/rulepack.py`, `schemafence/facts.py`, `rules/*.json` | **done** — the fact registry, the vocabulary, `--infer` and the overlap checks are all below |
 | **R5** | the B-class errors, not only the A class | `checks_sql.py`, then tier 3 | S2, S4, S5, S6, and the counterexample tier. |
-| **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, rule packs | **done** — `ALTER`, `DROP`, `CREATE INDEX`, `COMMENT ON`, DML and session statements are read as actions; every statement no reader claimed is listed by position, and a file that yields nothing at all exits 2 |
+| **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, rule packs | **done** — `ALTER`, `DROP`, `CREATE INDEX`, `COMMENT ON`, DML and session statements are read as actions; every statement no reader claimed is listed by position; a change kind the vocabulary does not declare is reported rather than silently produced; and a file that yields nothing at all exits 2. The same pass collapsed the four spellings of one primary key into one fact, which is what let the rule cover all of them |
 | **R7** | the fence's rule set is configurable | `guard.py` | The seven layers are code. |
 | **R8** | a rule over the statement, not only over the schema | a SQL fact model | `checks_sql.py` has the facts it needs (the FROM chain, join keys, uniqueness) but does not expose them as rows, so every rule written so far reads DDL. |
 
@@ -257,6 +257,63 @@ guessing about them.
 The five checks that already exist stay Python. The rule file layer is for what
 gets added — moving the old ones across is mechanical and can wait until the
 vocabulary stops moving.
+
+### What can be configured, and what cannot
+
+Three files, three different answers, because the three of them do different things.
+
+| Where | Reports, or decides | A rule file may change | A rule file may never change |
+| --- | --- | --- | --- |
+| `checks.py` | reports | any rule over the schema | the facts it reads |
+| `checks_sql.py` | reports | nothing yet — R8 | the facts it reads |
+| `guard.py` | **decides** | the table whitelist, the row cap, the forbidden functions | the seven layers |
+
+The gap between the first two rows and the third is not one of effort. A reviewer
+configured too loosely reports less; a fence configured too loosely lets a write
+through. So R7 is parameters rather than rules, and it shares this layer's loader
+without sharing its evaluator — the same shape as the two halves of the project,
+one level down.
+
+### The fact layer is a registry
+
+`rulepack.py` does not know what DDL is. It asks `schemafence/facts.py` for rows
+with named fields, and a provider declares three things: the fields it offers, the
+fact models it can be read from, and how to turn one into rows. Three providers are
+registered — `table`, `column`, `change` — and R8 is a fourth.
+
+This is the whole reason a rule can be added without touching the engine, and it is
+also why the vocabulary cannot drift from the evaluator: `--vocabulary` and
+`--facts` are both built from the registry that applies the rules.
+
+### Inference, and what it refuses to do
+
+`--infer` enumerates the closed vocabulary, keeps what fires on every `fires`
+example and stays silent on every `silent` one, and reports the near misses when
+nothing fits. The evaluator used backwards, offline, with no model in the loop.
+
+It does not synthesise a value it was not given. `present` and `absent` need none,
+numeric bounds come from the examples themselves, and a pattern appears only if the
+request supplied it under `hints.matches`. A regex invented from two samples would
+be a guess wearing a rule's clothing, and this layer exists so that a person can
+read a rule and check it.
+
+What it is good for is the case that started this: a requirement that can be
+written several ways. Hand it four spellings of one primary key and it comes back
+with `has_primary_key present` — but only because the reader had already collapsed
+them into one fact. So the search is also a test of the fact layer. Examples the
+vocabulary cannot separate are facts the reader does not collect yet, which is why
+that case exits 2 and names the near misses instead of proposing a rule that would
+never fire.
+
+### Overlap, so a pack does not grow by accident
+
+A pack grows by copying a rule and editing it, so the loader looks for what the copy
+did not change. One signature in two rules is refused outright. A rule that sits
+inside a wider one with the same assertion is reported as adding wording only. Two
+rules that select the same rows and disagree are reported as contradicting. Across
+packs, the same rule id in two of them is reported too, because a finding carries
+the id and nothing else — two rules behind one id cannot be told apart in the
+output.
 
 ## Prior art
 
