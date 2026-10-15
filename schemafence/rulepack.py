@@ -53,58 +53,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .checks import SEVERITY_RANK, Finding
-from .ddl import CHANGE_KINDS, Schema, parse_ddl
+from .ddl import Schema, parse_ddl
+from .facts import (CHANGE_KINDS, FACT_MODELS, FIELDS, TARGETS, is_built,
+                    models_for, rows_for, subject_of)
 
 PACK_VERSION = 1
 
-TARGETS = ("table", "column", "change")
-
-# The fact vocabulary.  A rule may name these and only these, which is what
-# keeps "configurable" from turning into "a second, worse SQL dialect".
-TABLE_FIELDS: dict[str, str] = {
-    "name": "str",
-    "schema": "str",
-    "qualified": "str",
-    "comment": "str|null",
-    "column_count": "int",
-    "primary_key_columns": "list[str]",
-    "has_primary_key": "bool",
-    "unique_key_count": "int",
-    "commented_columns": "int",
-    "uncommented_columns": "int",
-    "created_by_change": "bool",     # a CREATE TABLE in this script
-    "touched_by_change": "bool",     # named by at least one change action
-    "change_count": "int",
-}
-COLUMN_FIELDS: dict[str, str] = {
-    "name": "str",
-    "table": "str",
-    "qualified": "str",
-    "type": "str",
-    "base_type": "str",
-    "nullable": "bool",
-    "has_default": "bool",
-    "default": "str|null",
-    "references": "str|null",
-    "comment": "str|null",
-    "is_primary": "bool",
-    "is_unique": "bool",
-    "looks_like_key": "bool",
-    "looks_like_money": "bool",
-    "looks_like_time": "bool",
-    "added_by_change": "bool",       # an ALTER TABLE ADD COLUMN in this script
-    "added_by": "str|null",
-}
-CHANGE_FIELDS: dict[str, str] = {
-    "kind": "str",
-    "table": "str",
-    "column": "str|null",
-    "subject": "str",
-    "detail": "str",
-    "statement": "str",
-    "position": "int",
-}
-FIELDS = {"table": TABLE_FIELDS, "column": COLUMN_FIELDS, "change": CHANGE_FIELDS}
+# The vocabulary is not defined here.  It is whatever the registered fact
+# providers offer (see ``facts.py``), so the engine and the export cannot
+# disagree about what a rule may name.
 
 # Longest suffix first: _matches_all must be read before _matches.
 SELECT_OPS = ("_not_matches", "_matches_all", "_not_in", "_matches", "_present",
@@ -123,97 +80,14 @@ AUTHORING_CONTRACT = [
     "at load time with the field and the rule named, not ignored at runtime.",
     "Because the vocabulary is closed, a rule that needs a new field is a change",
     "to the reader, not to the file: say so instead of inventing a field name.",
+    "Read this and write the rule, or write only the title, the examples and the",
+    "severity and let the evaluator search for the facts that fit: --infer does",
+    "that offline, and both routes end at load_rulepack's example gate.",
 ]
 
 
 class RulePackError(ValueError):
     """A rule pack that cannot be loaded, with the reason a person can act on."""
-
-
-# --------------------------------------------------------------------------- #
-# Facts — the rows a rule selects from
-# --------------------------------------------------------------------------- #
-def _change_counts(schema: Schema) -> tuple[dict[str, int], set[str]]:
-    counts: dict[str, int] = {}
-    touched: set[str] = set()
-    for change in schema.changes:
-        if not change.table:
-            continue
-        counts[change.table] = counts.get(change.table, 0) + 1
-        touched.add(change.table)
-    return counts, touched
-
-
-def table_rows(schema: Schema) -> list[dict]:
-    counts, touched = _change_counts(schema)
-    rows = []
-    for t in schema.tables:
-        key = t.qualified.lower()
-        rows.append({
-            "name": t.name,
-            "schema": t.schema,
-            "qualified": key,
-            "comment": t.comment,
-            "column_count": len(t.columns),
-            "primary_key_columns": list(t.primary_key),
-            "has_primary_key": bool(t.primary_key),
-            "unique_key_count": len(t.unique_keys),
-            "commented_columns": t.commented_columns,
-            "uncommented_columns": len(t.columns) - t.commented_columns,
-            "created_by_change": t.created_by is not None,
-            "touched_by_change": key in touched,
-            "change_count": counts.get(key, 0),
-        })
-    return rows
-
-
-def column_rows(schema: Schema) -> list[dict]:
-    _, touched = _change_counts(schema)
-    rows = []
-    for t in schema.tables:
-        key = t.qualified.lower()
-        for c in t.columns:
-            rows.append({
-                "name": c.name,
-                "table": key,
-                "qualified": f"{key}.{c.name.lower()}",
-                "type": c.type,
-                "base_type": c.base_type,
-                "nullable": c.nullable,
-                "has_default": c.default is not None,
-                "default": c.default,
-                "references": c.references,
-                "comment": c.comment,
-                "is_primary": c.name.lower() in {k.lower() for k in t.primary_key},
-                "is_unique": t.is_unique(c.name),
-                "looks_like_key": c.looks_like_key,
-                "looks_like_money": c.looks_like_money,
-                "looks_like_time": c.looks_like_time,
-                "added_by_change": c.added_by is not None,
-                "added_by": c.added_by,
-                "_touched": key in touched,
-            })
-    return rows
-
-
-def change_rows(schema: Schema) -> list[dict]:
-    return [{
-        "kind": c.kind,
-        "table": c.table,
-        "column": c.column,
-        "subject": c.subject,
-        "detail": c.detail,
-        "statement": c.statement,
-        "position": c.position,
-    } for c in schema.changes]
-
-
-def facts(schema: Schema, target: str) -> list[dict]:
-    return {"table": table_rows, "column": column_rows, "change": change_rows}[target](schema)
-
-
-def row_subject(row: dict, target: str) -> str:
-    return str(row.get("subject") or row.get("qualified") or row.get("name") or target)
 
 
 # --------------------------------------------------------------------------- #
@@ -366,10 +240,10 @@ def validate_rulepack(pack: dict) -> dict:
     applies = pack.get("applies_to", ["ddl"])
     _require(isinstance(applies, list) and applies, "`applies_to` is a non-empty list")
     for value in applies:
-        _require(value in ("ddl", "schema"),
-                 f"`applies_to: {value}` — the only fact model built is the DDL one "
-                 f"(ddl, schema); a SQL-side rule needs a SQL fact model, which is "
-                 f"not built yet")
+        _require(value in FACT_MODELS,
+                 f"`applies_to: {value}` — no such fact model; known: "
+                 f"{', '.join(FACT_MODELS)}")
+        _require(is_built(value), f"`applies_to: {value}` — {FACT_MODELS[value]}")
     rules = pack.get("rules")
     _require(isinstance(rules, list) and rules, "`rules` is a non-empty list")
 
@@ -386,19 +260,21 @@ def validate_rulepack(pack: dict) -> dict:
         _require(rule.get("severity") in ("high", "medium", "low"),
                  f"{where}: severity is high, medium or low")
         target = rule.get("target")
-        _require(target in TARGETS, f"{where}: target is one of {', '.join(TARGETS)}")
+        _require(target in TARGETS(),
+                 f"{where}: target is one of {', '.join(TARGETS())}")
         for key in ("title", "detail", "fix"):
             _require(isinstance(rule.get(key), str) and rule[key].strip(),
                      f"{where}: `{key}` is required")
-        if target == "change":
-            _require("ddl" in applies,
-                     f"{where}: targets change actions, so the pack needs "
-                     f"`applies_to: [\"ddl\"]`")
+        offered = set(models_for(target))
+        _require(bool(offered & set(applies)),
+                 f"{where}: target `{target}` is read from "
+                 f"{', '.join(sorted(offered))}, but the pack declares "
+                 f"applies_to {applies}")
 
         select = rule.get("select", {})
         _require(isinstance(select, dict), f"{where}: `select` is an object")
         for key, value in select.items():
-            _selector_ok(key, value, FIELDS[target], where)
+            _selector_ok(key, value, FIELDS()[target], where)
 
         has_assert, forbids = "assert" in rule, bool(rule.get("forbid"))
         _require(has_assert != forbids,
@@ -406,7 +282,7 @@ def validate_rulepack(pack: dict) -> dict:
         if has_assert:
             _require(isinstance(rule["assert"], list) and rule["assert"],
                      f"{where}: `assert` is a non-empty list")
-            probe = {name: "" for name in FIELDS[target]}
+            probe = {name: "" for name in FIELDS()[target]}
             for assertion in rule["assert"]:
                 _require(isinstance(assertion, dict), f"{where}: an assertion is an object")
                 field_name = assertion.get("field")
@@ -426,13 +302,17 @@ def validate_rulepack(pack: dict) -> dict:
             for script in scripts:
                 _require(isinstance(script, str) and script.strip(),
                          f"{where}: `examples.{label}` holds DDL as text")
+
+    exact = find_overlaps(pack)["exact"]
+    _require(not exact, f"`{pack['rulepack']}` has a rule written twice: "
+                        + "; ".join(exact))
     return pack
 
 
 def _run_one_rule(rule: dict, schema: Schema) -> tuple[list[Finding], list[dict], int]:
     target = rule["target"]
-    rows = facts(schema, target)
-    fields = FIELDS[target]
+    rows = rows_for(target, schema)
+    fields = FIELDS()[target]
     where = f"rule `{rule['id']}`"
     findings: list[Finding] = []
     matched = 0
@@ -447,7 +327,7 @@ def _run_one_rule(rule: dict, schema: Schema) -> tuple[list[Finding], list[dict]
         if fails:
             findings.append(Finding(
                 check=rule["id"], severity=rule["severity"], title=rule["title"],
-                subject=row_subject(row, target),
+                subject=subject_of(target, row),
                 detail=rule["detail"], fix=rule["fix"]))
     return findings, rows, matched
 
@@ -505,6 +385,132 @@ def load_pack_file(path) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Overlap — the same rule twice, one rule inside another, two rules that disagree
+# --------------------------------------------------------------------------- #
+def rule_signature(rule: dict) -> str:
+    """What a rule means, with its wording removed.
+
+    A pack grows by copying a rule and editing it.  Two rules with one
+    signature are one rule, and applying both reports every subject twice, so
+    this is what catches the copy nobody finished editing.
+    """
+    select = json.dumps(rule.get("select") or {}, sort_keys=True, ensure_ascii=False)
+    if rule.get("forbid"):
+        return f"{rule['target']} | {select} | forbid"
+    assertions = sorted(json.dumps(a, sort_keys=True, ensure_ascii=False)
+                        for a in rule.get("assert", []))
+    return f"{rule['target']} | {select} | {' & '.join(assertions)}"
+
+
+def _same_assertions(one: dict, other: dict) -> bool:
+    def canon(rule):
+        return sorted(json.dumps(a, sort_keys=True, ensure_ascii=False)
+                      for a in rule.get("assert", []))
+    return canon(one) == canon(other)
+
+
+def _select_is_subset(one: dict, other: dict) -> bool:
+    """True when every constraint in `one` is also in `other`.
+
+    Selection keys are ANDed, so the rule with fewer constraints selects more
+    rows and reports more findings.  The narrower rule can only add wording.
+    """
+    one, other = one or {}, other or {}
+    return all(k in other and other[k] == v for k, v in one.items())
+
+
+def _disagreement(one: dict, other: dict) -> str | None:
+    """The first pair of assertions that cannot both hold on one row."""
+    for x in one.get("assert", []):
+        for y in other.get("assert", []):
+            if x.get("field") != y.get("field"):
+                continue
+            pair = (x.get("op"), y.get("op"))
+            if pair in (("present", "absent"), ("absent", "present")):
+                return f"`{x['field']}` is required present by one and absent by the other"
+            if pair in (("matches", "not_matches"), ("not_matches", "matches")) \
+                    and x.get("value") == y.get("value"):
+                return f"`{x['field']}` must match and must not match {x.get('value')!r}"
+    return None
+
+
+def find_overlaps(pack: dict) -> dict[str, list[str]]:
+    """Rules that repeat, contain, or contradict one another.
+
+    Returned rather than raised, because two of the three are worth reading
+    rather than worth refusing: a rule may legitimately sit inside a wider one
+    when its wording is the point.  `load_rulepack` refuses only `exact`.
+    """
+    rules = pack["rules"]
+    exact: list[str] = []
+    redundant: list[str] = []
+    conflicting: list[str] = []
+    owner: dict[str, str] = {}
+
+    for rule in rules:
+        signature = rule_signature(rule)
+        if signature in owner:
+            exact.append(f"`{rule['id']}` says what `{owner[signature]}` already says "
+                         f"(same target, same selection, same assertion) — applying both "
+                         f"would report every subject twice")
+        else:
+            owner[signature] = rule["id"]
+
+    for index, one in enumerate(rules):
+        for other in rules[index + 1:]:
+            if one.get("target") != other.get("target"):
+                continue
+            if one.get("forbid") or other.get("forbid"):
+                continue
+            select_one, select_other = one.get("select") or {}, other.get("select") or {}
+            if select_one != select_other and _same_assertions(one, other):
+                if _select_is_subset(select_one, select_other):
+                    redundant.append(f"`{other['id']}` sits inside `{one['id']}` — every "
+                                     f"row it selects is selected by `{one['id']}` too, "
+                                     f"with the same assertion, so it adds wording only")
+                elif _select_is_subset(select_other, select_one):
+                    redundant.append(f"`{one['id']}` sits inside `{other['id']}` — every "
+                                     f"row it selects is selected by `{other['id']}` too, "
+                                     f"with the same assertion, so it adds wording only")
+            if select_one == select_other:
+                why = _disagreement(one, other)
+                if why:
+                    conflicting.append(f"`{one['id']}` and `{other['id']}` select the same "
+                                       f"rows and disagree: {why}")
+    return {"exact": exact, "redundant": redundant, "conflicting": conflicting}
+
+
+def cross_pack_notes(packs: list[dict]) -> list[str]:
+    """Two packs that define one rule id, or one rule.
+
+    Applied together they are a single review, and a finding carries only the
+    rule id, so an id used twice makes two different rules indistinguishable
+    in the output.
+    """
+    notes: list[str] = []
+    id_owner: dict[str, str] = {}
+    signature_owner: dict[str, tuple[str, str]] = {}
+    for pack in packs:
+        name = pack["rulepack"]
+        for rule in pack["rules"]:
+            if rule["id"] in id_owner and id_owner[rule["id"]] != name:
+                notes.append(f"rule id `{rule['id']}` is defined by both "
+                             f"`{id_owner[rule['id']]}` and `{name}` — a finding names "
+                             f"only the id, so the two cannot be told apart")
+            else:
+                id_owner.setdefault(rule["id"], name)
+            signature = rule_signature(rule)
+            if signature in signature_owner and signature_owner[signature][0] != name:
+                other_pack, other_id = signature_owner[signature]
+                notes.append(f"`{name}.{rule['id']}` says what "
+                             f"`{other_pack}.{other_id}` says — the same rule is in two "
+                             f"packs, so a subject would be reported twice")
+            else:
+                signature_owner.setdefault(signature, (name, rule["id"]))
+    return notes
+
+
+# --------------------------------------------------------------------------- #
 # The review
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -536,6 +542,10 @@ def run_rulepack(pack: dict, schema: Schema) -> RuleReport:
 
     for position, head, why in schema.unread:
         report.notes.append(f"statement {position} was not read ({why}): {head}")
+
+    overlaps = find_overlaps(pack)
+    report.notes.extend(overlaps["redundant"])
+    report.notes.extend(overlaps["conflicting"])
 
     partial = [t.qualified for t in schema.tables if t.created_by is None]
     if partial:
@@ -613,7 +623,9 @@ def merge_reports(reports: list[RuleReport]) -> RuleReport:
 def review_ddl(packs: list[dict], text: str) -> RuleReport:
     """Parse a script once, apply every pack.  The whole review path."""
     schema = parse_ddl(text)
-    return merge_reports([run_rulepack(pack, schema) for pack in packs])
+    merged = merge_reports([run_rulepack(pack, schema) for pack in packs])
+    merged.notes.extend(cross_pack_notes(packs))
+    return merged
 
 
 def vocabulary() -> dict:
@@ -624,7 +636,8 @@ def vocabulary() -> dict:
     """
     return {
         "rulepack_version": PACK_VERSION,
-        "targets": {target: FIELDS[target] for target in TARGETS},
+        "targets": FIELDS(),
+        "fact_models": {m: (r or "built") for m, r in FACT_MODELS.items()},
         "selector": {
             "note": "every key in `select` must hold, so they are ANDed",
             "path": {
@@ -665,6 +678,159 @@ def vocabulary() -> dict:
         },
         "authoring_contract": AUTHORING_CONTRACT,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Inference — the rules that would separate the examples you supplied
+# --------------------------------------------------------------------------- #
+def _example_rows(target: str, script: str) -> list[dict]:
+    return rows_for(target, parse_ddl(script))
+
+
+def _candidate_assertions(target: str, examples: list[list[dict]],
+                          hints: dict | None = None) -> list[dict]:
+    """Every assertion the closed vocabulary can make, for one target.
+
+    Nothing here invents a value: ``present`` and ``absent`` need none, the
+    numeric bounds are the values your own examples contain, and a pattern only
+    appears if you supplied it under ``hints.matches``.  A synthesised regex
+    would be a guess dressed as a rule.
+    """
+    out: list[dict] = []
+    for name, kind in FIELDS()[target].items():
+        out.append({"field": name, "op": "present"})
+        out.append({"field": name, "op": "absent"})
+        if kind == "int":
+            values = sorted({row.get(name) for rows in examples for row in rows
+                             if isinstance(row.get(name), int)})
+            for value in values:
+                out.append({"field": name, "op": "gte", "value": value})
+                out.append({"field": name, "op": "lte", "value": value})
+    for field_name, pattern in ((hints or {}).get("matches") or {}).items():
+        out.append({"field": field_name, "op": "matches", "value": pattern})
+        out.append({"field": field_name, "op": "not_matches", "value": pattern})
+    return out
+
+
+def _candidate_selections(target: str) -> list[dict]:
+    out: list[dict] = [{}]
+    for name, kind in FIELDS()[target].items():
+        if kind == "bool":
+            out.append({name: True})
+            out.append({name: False})
+        else:
+            out.append({f"{name}_present": True})
+            out.append({f"{name}_absent": True})
+    return out
+
+
+def _fires_on(target: str, rows: list[dict], select: dict, assertion: dict) -> int:
+    where = "inference"
+    return sum(1 for row in rows
+               if row_matches(row, select, FIELDS()[target], where)
+               and not assertion_holds(assertion, row, where))
+
+
+def _rank(target: str, select: dict, assertion: dict) -> tuple:
+    """Prefer the plainest rule that fits: no selector, a boolean fact, `present`."""
+    kind = FIELDS()[target].get(assertion["field"], "str")
+    return (len(select),
+            0 if kind == "bool" else (1 if kind == "int" else 2),
+            ASSERT_OPS.index(assertion["op"]),
+            assertion["field"])
+
+
+def rule_from_examples(request: dict, select: dict, assertion: dict) -> dict:
+    """A loadable rule: the description you wrote, the facts that fit, your examples."""
+    rule = {
+        "id": request.get("id") or "unnamed-rule",
+        "severity": request.get("severity", "medium"),
+        "target": request["target"],
+        "title": request.get("title", ""),
+        "detail": request.get("detail", ""),
+        "fix": request.get("fix", ""),
+        "assert": [assertion],
+        "examples": {"fires": list(request["examples"]["fires"]),
+                     "silent": list(request["examples"]["silent"])},
+    }
+    if select:
+        rule["select"] = select
+    return rule
+
+
+def infer_rule(request: dict, limit: int = 5) -> dict:
+    """The rules that would separate the examples you supplied.
+
+    The evaluator used backwards: enumerate the closed vocabulary, keep what
+    fits every label, and report what nearly fits when nothing does.  No model
+    runs here, and that is the point — a rule you can generate *and* apply is
+    one this evaluator can already express.
+
+    A candidate is offered only when it fires on every ``fires`` example and
+    stays silent on every ``silent`` one.  That is the bar ``load_rulepack``
+    will hold it to anyway, so anything returned here loads as it stands: the
+    examples travel with the rule.
+
+    When nothing fits, the near misses matter more than the answer.  They name
+    the examples the closest rule cannot separate, which is how "this needs a
+    fact the reader does not collect yet" gets said out loud instead of
+    arriving as a rule that quietly never fires.
+    """
+    target = request.get("target")
+    if target not in TARGETS():
+        return {"error": f"target `{target}` — choose one of {', '.join(TARGETS())}"}
+    examples = request.get("examples") or {}
+    for label in ("fires", "silent"):
+        scripts = examples.get(label)
+        if not isinstance(scripts, list) or not scripts:
+            return {"error": f"`examples.{label}` is a non-empty list of DDL scripts"}
+        for script in scripts:
+            if not isinstance(script, str) or not script.strip():
+                return {"error": f"`examples.{label}` holds DDL as text"}
+
+    parsed = {label: [_example_rows(target, script) for script in examples[label]]
+              for label in ("fires", "silent")}
+    every = parsed["fires"] + parsed["silent"]
+    assertions = _candidate_assertions(target, every, request.get("hints"))
+    selections = _candidate_selections(target)
+
+    fitting, near = [], []
+    for select in selections:
+        for assertion in assertions:
+            got = [label for label, want_fire in (("fires", True), ("silent", False))
+                   for rows in parsed[label]
+                   if (_fires_on(target, rows, select, assertion) > 0) is not want_fire]
+            wrong = len(got)
+            total = len(every)
+            if wrong == 0:
+                fitting.append((_rank(target, select, assertion), select, assertion))
+            else:
+                near.append((wrong / total, _rank(target, select, assertion),
+                             select, assertion, total - wrong, total))
+
+    fitting.sort(key=lambda item: item[0])
+    candidates = [rule_from_examples(request, select, assertion)
+                  for _key, select, assertion in fitting[:limit]]
+
+    near.sort(key=lambda item: (item[0], item[1]))
+    misses = [{"select": select, "assert": [assertion],
+               "separated": f"{right} of {total} example(s)",
+               "wrong": wrong} for _r, _k, select, assertion, right, total, wrong in
+              [(n[0], n[1], n[2], n[3], n[4], n[5], n[5] - n[4]) for n in near[:limit]]]
+
+    result: dict = {
+        "target": target,
+        "examples": {label: len(examples[label]) for label in ("fires", "silent")},
+        "candidates": candidates,
+        "near_misses": misses,
+        "searched": len(selections) * len(assertions),
+    }
+    if not candidates:
+        result["note"] = (
+            "the examples the near misses cannot separate are the ones that need a "
+            "fact the reader does not collect yet. That is a change to the fact "
+            "provider, not to the rule file.")
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -765,12 +931,15 @@ def run_rulepack_selftest() -> tuple[list[tuple[str, str, bool, str]], bool]:
          refused_on_unknown_field)
 
     def refused_on_sql_fact_model():
+        # not "does the message contain a particular phrase" but "does the
+        # refusal carry the reason registered for that model, verbatim"
+        reason = FACT_MODELS["sql"]
         try:
             load_rulepack(_pack([_specimen(fires=["CREATE TABLE t (a INT);"],
                                            silent=["CREATE TABLE t (a INT);"])],
                                 applies_to=["sql"]))
         except RulePackError as exc:
-            return "refused", "not built yet" in str(exc)
+            return "refused", "applies_to: sql" in str(exc) and reason in str(exc)
         return "loaded", False
 
     case("a pack that asks for the SQL fact model is refused, and says why",
@@ -895,8 +1064,8 @@ def run_rulepack_selftest() -> tuple[list[tuple[str, str, bool, str]], bool]:
     def vocabulary_export_is_consistent():
         vocab = vocabulary()
         return (f"{len(vocab['targets'])} targets, {len(vocab['assertion_ops'])} ops",
-                set(vocab["targets"]) == set(TARGETS)
-                and set(vocab["targets"]["table"]) == set(TABLE_FIELDS))
+                set(vocab["targets"]) == set(TARGETS())
+                and set(vocab["targets"]["table"]) == set(FIELDS()["table"]))
 
     case("the exported vocabulary matches the evaluator it is exported from",
          "3 targets", vocabulary_export_is_consistent)

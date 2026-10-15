@@ -12,6 +12,8 @@ Public surface:
     load_rulepack(path, verify=True) -> dict   (a review rule, as a file)
     review_ddl(packs, text) -> RuleReport      (apply rules to somebody else's script)
     vocabulary()     -> dict            (the closed fact vocabulary, for authoring)
+    infer_rule(request) -> dict         (the rule that separates your examples, offline)
+    PROVIDERS / rows_for / register     (the facts a rule reads, and how to add one)
     Embedder         -> text -> vector  (offline hash, or any OpenAI-compatible API)
     JsonStore/PgStore                   (the knowledge layer, two backends)
     Toolbox                             (the four tools, all behind guard())
@@ -21,13 +23,15 @@ Public surface:
 from .checks import Finding, analyze, summarize
 from .checks_sql import SqlReview, check_sql, run_sql_selftest  # noqa: F401
 from .ddl import Change, Column, Schema, Table, parse_ddl
+from .facts import (FACT_MODELS, PROVIDERS, TARGETS, register,  # noqa: F401
+                    rows_for)
 from .guard import GuardResult, guard, run_selftest
 from .knowledge import (Chunk, Embedder, Hit, JsonStore, PgStore,  # noqa: F401
                         chunk_markdown, cosine, embed_offline,
                         estimate_tokens, ingest_directory, read_corpus)
-from .rulepack import (RulePackError, RuleReport, load_rulepack,  # noqa: F401
-                       review_ddl, run_rulepack, run_rulepack_selftest,
-                       verify_rulepack, vocabulary)
+from .rulepack import (RulePackError, RuleReport, infer_rule,     # noqa: F401
+                       load_rulepack, review_ddl, run_rulepack,
+                       run_rulepack_selftest, verify_rulepack, vocabulary)
 from .tools import TOOL_SPECS, Toolbox, ToolResult                 # noqa: F401
 
 __all__ = [
@@ -39,6 +43,11 @@ __all__ = [
     "Finding",
     "analyze",
     "summarize",
+    "FACT_MODELS",
+    "PROVIDERS",
+    "TARGETS",
+    "register",
+    "rows_for",
     "SqlReview",
     "check_sql",
     "run_sql_selftest",
@@ -48,6 +57,7 @@ __all__ = [
     "RuleReport",
     "RulePackError",
     "load_rulepack",
+    "infer_rule",
     "verify_rulepack",
     "run_rulepack",
     "review_ddl",
