@@ -34,6 +34,7 @@ from schemafence.ddl import parse_ddl                            # noqa: E402
 from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.knowledge import (Chunk, Embedder, JsonStore,    # noqa: E402
                                    chunk_markdown, ingest_directory)
+from schemafence.rulepack import run_rulepack_selftest            # noqa: E402
 from schemafence.tools import Toolbox, run_tool_selftest          # noqa: E402
 
 PY = sys.executable
@@ -101,6 +102,20 @@ def cli(args, env=None, timeout=None):
         if label == "--ask" and len(args) > 1:
             label += " " + args[1][:12]
         TIMINGS.append((label, time.perf_counter() - started))
+
+
+def review_cli(args, env=None, timeout=None):
+    """The review entry point, run the way a pipeline would run it."""
+    if timeout is None:
+        timeout = TIMEOUT
+    started = time.perf_counter()
+    try:
+        return subprocess.run([PY, "-m", "schemafence.review", *args],
+                              capture_output=True, text=True, env=child_env(env),
+                              cwd=str(ROOT), timeout=timeout)
+    finally:
+        label = args[0] if args else "(no args)"
+        TIMINGS.append(("review " + label, time.perf_counter() - started))
 
 
 # --------------------------------------------------------------------------- #
@@ -691,6 +706,101 @@ def sql_semantics_cases() -> None:
           f"count={'yes' if '12 cases → all passed' in p.stdout else 'no'}")
 
 
+def rulepack_cases() -> None:
+    """A review rule is a file, and the file has to prove itself before it applies.
+
+    The cases here are the load-bearing part of that claim: the examples in a
+    pack are its acceptance test, a rule that matched nothing has to say so,
+    and a script no reader understood has to come back as exit 2 rather than as
+    "0 finding(s)" — the one output that reads as approval.
+    """
+    print("\n[K] rule packs — a rule as a file, applied to somebody else's script")
+    selftest_check("K0", "run_rulepack_selftest() 13 cases all pass", run_rulepack_selftest)
+
+    hygiene = str(ROOT / "rules" / "table-hygiene.json")
+    change = str(ROOT / "rules" / "change-review.json")
+    script = str(ROOT / "examples" / "change_script_review.sql")
+
+    p = review_cli(["--rules", hygiene, "--rules", change, "--ddl", script])
+    check("K1", "the shipped packs verify, and the example script is reviewed and fails",
+          p.returncode == 1 and "examples verified" in p.stdout
+          and "cannot reproduce" not in p.stdout
+          and "9 finding(s), worst high" in p.stdout,
+          f"rc={p.returncode} "
+          f"verdict={'yes' if '9 finding(s), worst high' in p.stdout else 'no'}")
+
+    p = review_cli(["--rules", hygiene, "--verify"])
+    check("K2", "`--verify` runs the pack's own examples and exits 0",
+          p.returncode == 0 and "14 example(s) → all passed" in p.stdout,
+          f"rc={p.returncode}")
+
+    p = review_cli(["--vocabulary"])
+    try:
+        vocab = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        vocab = {}
+    check("K3", "`--vocabulary` exports the closed vocabulary as the authoring prompt",
+          p.returncode == 0 and set(vocab.get("targets", {})) == {"table", "column", "change"}
+          and "authoring_contract" in vocab,
+          f"rc={p.returncode} targets={sorted(vocab.get('targets', {}))}")
+
+    clean = TMP / "k-clean.sql"
+    clean.write_text("CREATE TABLE shop.t (id BIGSERIAL PRIMARY KEY);\n"
+                     "COMMENT ON TABLE shop.t IS '订单表 用途:支付事实 在线';\n"
+                     "COMMENT ON COLUMN shop.t.id IS '主键 标准:TS-001';\n", encoding="utf-8")
+    p = review_cli(["--rules", hygiene, "--ddl", str(clean)])
+    check("K4", "a script that satisfies every rule exits 0 and says what was checked",
+          p.returncode == 0 and "no rule fired" in p.stdout
+          and "matched" in p.stdout,
+          f"rc={p.returncode}")
+
+    blind = TMP / "k-blind.sql"
+    blind.write_text("\\copy shop.orders from 'x.csv'\nVACUUM FULL;\n", encoding="utf-8")
+    p = review_cli(["--rules", hygiene, "--ddl", str(blind)])
+    check("K5", "a script no reader understood exits 2, never 0 with no findings",
+          p.returncode == 2 and "NOTHING RECOGNISED" in p.stdout
+          and "0 finding(s)" not in p.stdout,
+          f"rc={p.returncode}")
+
+    broken = TMP / "k-broken.json"
+    pack = json.loads(Path(hygiene).read_text(encoding="utf-8"))
+    pack["rulepack"] = "broken"
+    pack["rules"] = [pack["rules"][3]]
+    pack["rules"][0]["examples"]["silent"] = ["CREATE TABLE shop.t (id INT);"]
+    broken.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    p = review_cli(["--rules", str(broken), "--ddl", script])
+    check("K6", "a pack that fails its own examples is refused, and nothing is applied",
+          p.returncode == 2 and "refused" in p.stdout
+          and "failed its own examples" in p.stdout,
+          f"rc={p.returncode}")
+
+    schema = parse_ddl(Path(script).read_text(encoding="utf-8"))
+    kinds = [c.kind for c in schema.changes]
+    stubs = [t.qualified for t in schema.tables if t.created_by is None]
+    check("K7", "a change script reads as actions: a dropped column, a dropped table, "
+                "an altered table with no CREATE behind it",
+          schema.statements == 9 and not schema.unread
+          and ["drop_column", "drop_table"] == [k for k in kinds
+                                                if k in ("drop_column", "drop_table")]
+          and stubs == ["shop.orders", "shop.orders_2023"]
+          and schema.recognised,
+          f"{schema.statements} stmt, {len(schema.changes)} changes, stubs={stubs}")
+
+    added = next((c for t in schema.tables for c in t.columns if c.name == "channel_code"), None)
+    check("K8", "a column added by ALTER is a column the rules can read, and it carries "
+                "what the ALTER said about it",
+          added is not None and added.nullable is False and added.default is None
+          and added.added_by is not None,
+          f"nullable={None if added is None else added.nullable} "
+          f"added_by={'yes' if added and added.added_by else 'no'}")
+
+    p = review_cli(["--rules", hygiene, "--ddl", str(ROOT / "examples" / "sample_schema.sql")])
+    check("K9", "the same pack reviews a full snapshot: every rule matched a non-empty set",
+          p.returncode == 1 and "0 row(s)" not in p.stdout
+          and "(nothing matched)" not in p.stdout,
+          f"rc={p.returncode}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -703,6 +813,7 @@ def main() -> int:
     scale_corpus_cases()
     hermetic_cases()
     sql_semantics_cases()
+    rulepack_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)

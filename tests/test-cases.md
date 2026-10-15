@@ -21,11 +21,14 @@
 | H. 规模语料生成器 | 4 | 0 | 4 PASS |
 | I. 隔离子进程 | 2 | 0 | 2 PASS |
 | J. SQL 语义检查 | 11 | 0 | 11 PASS |
-| **合计** | **97** | **10** | **97 PASS** |
+| K. 规则包 | 10 | 0 | 10 PASS |
+| **合计** | **107** | **10** | **107 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
 J0–J10 随 `checks_sql.py` 一起进来（见 §J）。
+K0–K9 随规则包（`schemafence/rulepack.py`、`rules/*.json`、`python -m schemafence.review`）
+一起进来（见 §K）。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -189,7 +192,7 @@ H3 的存在理由：基准会**照单全收目录里的文件**。若小规模�
 反向验证：把带 `SF_EMBED_API_KEY` 的 `.schemafence.env` 放进一个假 home，用
 `USERPROFILE=<假 home> HOME=<假 home>` 跑整个 harness——修复前 D1/D2/D5/D6/D16/D19
 与 F1/F2 共 8 条 FAIL（端点指死端口时是 `rc=2`；指真端点时就是 VM 上的那次超时），
-修复后 86/86（当时的用例总数；加 §J 之后总数是 97）。
+修复后 86/86（当时的用例总数；加 §J 与 §K 之后总数是 107）。
 
 ## J. SQL 语义检查（`checks.py` 与 `guard.py` 之间那一层）
 
@@ -219,6 +222,34 @@ J4/J5/J6 是这一层最容易被写坏的三个反例：**膨胀侧自己的度
 `_clause_body` 曾经把 `found[i + 1].start` 当成整数用，漏了调用括号，于是**只要
 `WHERE` 不是最后一个子句就抛 `TypeError`** —— 真实查询里这是常态，而当时的九个用例
 恰好都以 `WHERE` 结尾，所以 S1/S3 在大多数语句上其实是崩的。这三例就是那次修复的门闩。
+
+## K. 规则包（一条审核规则是一个文件，外加它自己的用例）
+
+规则从 Python 函数里搬到一个 JSON 文件里。**一个规则的用例不是提示词，是验收**：
+`load_rulepack(verify=True)` 会先跑这个规则自己带的 `fires` / `silent` 例子，任何一条
+对不上就拒收整个文件。这样「新增规则只写文件、不改代码」的前提才立得住——能立刻用，
+是因为文件与结论之间除了求值器没有别的东西；能信，是因为文件必须自己证明自己。
+
+另外两条纪律：**规则选择器匹配到 0 行必须出声**（0 不是通过），**整份文件没被读懂必须
+退出码 2**（不许打印 `0 finding(s)` 然后退 0，那读起来就是批准）。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| K0 | 内置自检 | `rules/` 下两个包存在 | `run_rulepack_selftest()` | 13 例全过 | 13/13 | PASS |
+| K1 | 接线 | 两个已发布的包 | `--rules table-hygiene --rules change-review --ddl examples/change_script_review.sql` | 两个包各自 `examples verified`，9 条 finding，`worst high`，rc=1 | rc=1 | PASS |
+| K2 | 自证 | 同上 | `--rules table-hygiene --verify` | 14 例全过，rc=0 | `14 example(s) → all passed` | PASS |
+| K3 | 词表导出 | 无 | `--vocabulary` | rc=0，JSON 含三个 target 与 `authoring_contract` | `targets=['change','column','table']` | PASS |
+| K4 | 反例 | 一份每条规则都满足的脚本 | `--rules table-hygiene --ddl k-clean.sql` | 0 finding，rc=0，仍打印每个规则匹配了多少行 | rc=0 | PASS |
+| K5 | 边界 | 一份没人读得懂的脚本（`\copy` / `VACUUM FULL`） | `--ddl k-blind.sql` | rc=2，打印 `NOTHING RECOGNISED`，**不打印 `0 finding(s)`** | rc=2 | PASS |
+| K6 | 拒收 | 把 `silent` 例子换成会命中的脚本 | `--rules k-broken.json --ddl …` | rc=2，报 `failed its own examples`，规则不生效 | rc=2 | PASS |
+| K7 | 动作级读取 | `examples/change_script_review.sql` | `parse_ddl` | 9 条语句 0 条 unread，9 个 action，含 `drop_column`/`drop_table`；两张只被 ALTER 的表 `created_by is None` | `stubs=['shop.orders','shop.orders_2023']` | PASS |
+| K8 | 动作级事实 | 同上 | 取 `ALTER … ADD COLUMN channel_code TEXT NOT NULL` 那一列 | 该列可被规则读到，且带 `nullable=False`、`default=None`、`added_by` 有值 | `nullable=False added_by=yes` | PASS |
+| K9 | 快照复用 | `examples/sample_schema.sql` | `--rules table-hygiene --ddl sample_schema.sql` | rc=1，且每一列规则都匹配到非空集合（无 `(nothing matched)`） | rc=1 | PASS |
+
+K5 与 K6 是这一节存在的理由：**会撒谎的绿**有两种，一种是没读懂却报 0 条，一种是规则
+自己都没被用例证明过就上了岗。两种都不许出现。K7/K8 说明为什么规则层排在动作读取器
+之后——`ddl.py` 以前只认 `CREATE TABLE`，一份 ALTER 脚本会解析成 0 张表、0 条 finding、
+退出码 0，正好是这个项目要来抓的失败发生在自己身上。
 
 ## 已知约定核对
 

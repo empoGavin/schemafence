@@ -29,6 +29,16 @@ jobs:
       - name: demo.py selftests (guard, router, tools, sql-checks)
         run: python demo.py
 
+      # Every rule pack carries its own examples, and the loader refuses a pack
+      # whose labels do not reproduce. Running them here is the same gate, in CI.
+      - name: rule packs (each pack's examples, then the example change script)
+        run: |
+          python -m schemafence.review --rules rules/table-hygiene.json --verify
+          python -m schemafence.review --rules rules/change-review.json --verify
+          python -m schemafence.review --rules rules/table-hygiene.json \
+            --rules rules/change-review.json \
+            --ddl examples/change_script_review.sql || test $? -eq 1
+
       - name: tests/qa_probe.py (the full offline harness)
         run: python tests/qa_probe.py
 
