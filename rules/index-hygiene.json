@@ -1,0 +1,36 @@
+{
+  "rulepack": "index-hygiene",
+  "version": 1,
+  "applies_to": ["catalog"],
+  "rules": [
+    {
+      "id": "no-duplicate-index",
+      "severity": "medium",
+      "target": "index",
+      "title": "An index repeats another one on the same columns, in the same order",
+      "detail": "This index has the same table, the same columns in the same order, the same method and no weaker a predicate than {duplicate_of}, so it is the same index under a second name. Both are maintained on every INSERT, UPDATE and DELETE, and both take cache that a useful index could use. Nothing in the schema says which one was meant to stay.",
+      "fix": "Drop one of them. If the two differ only in a WHERE clause, the redundant one is the partial index — the full one already serves those rows. If one of them backs a PRIMARY KEY or a UNIQUE constraint, that is the one to keep.",
+      "select": {
+        "comparable": true
+      },
+      "assert": [
+        {
+          "field": "duplicate_count",
+          "op": "lte",
+          "value": 0
+        }
+      ],
+      "examples": {
+        "fires": [
+          "CREATE TABLE shop.orders (id BIGSERIAL, paid_at TIMESTAMPTZ NOT NULL);\nCREATE INDEX idx_orders_paid_at   ON shop.orders (paid_at);\nCREATE INDEX idx_orders_paid_at_2 ON shop.orders (paid_at);",
+          "CREATE TABLE shop.events (id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ);\nCREATE INDEX idx_events_id ON shop.events (id);"
+        ],
+        "silent": [
+          "CREATE TABLE shop.t (a INT, b INT);\nCREATE INDEX i_t_ab ON shop.t (a, b);\nCREATE INDEX i_t_ba ON shop.t (b, a);",
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, paid_at TIMESTAMPTZ);\nCREATE INDEX idx_orders_paid_at ON shop.orders (paid_at);",
+          "CREATE TABLE shop.t (a INT);\nCREATE INDEX i_t_a_up ON shop.t (a) WHERE a > 0;\nCREATE INDEX i_t_a_dn ON shop.t (a) WHERE a < 0;"
+        ]
+      }
+    }
+  ]
+}
