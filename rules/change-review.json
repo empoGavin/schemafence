@@ -1,0 +1,73 @@
+{
+  "rulepack": "change-review",
+  "version": 1,
+  "applies_to": ["ddl"],
+  "rules": [
+    {
+      "id": "no-drop-table",
+      "severity": "high",
+      "target": "change",
+      "title": "The script drops a table",
+      "detail": "A dropped table cannot be reviewed after the fact, and the backup that would restore it is only as good as the last restore test. In a review gate this is the one action that has to be approved by a person rather than by a rule.",
+      "fix": "Rename the table to <name>_deprecated, deploy, and drop it in a later release once nothing has read it. If the drop is intended, take it out of this script and run it as an approved change.",
+      "forbid": true,
+      "select": {
+        "kind": "drop_table"
+      },
+      "examples": {
+        "fires": [
+          "DROP TABLE shop.orders_2023;",
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY); DROP TABLE IF EXISTS shop.orders_bak;"
+        ],
+        "silent": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY);"
+        ]
+      }
+    },
+    {
+      "id": "no-drop-column",
+      "severity": "medium",
+      "target": "change",
+      "title": "The script drops a column",
+      "detail": "A dropped column can be an application still reading it, a view that selects it, or a report nobody in this review has seen. Nothing in the script says who still reads it, and the failure appears in another team's code.",
+      "fix": "Rename the column to <name>_deprecated and deploy; drop it a release later, once the rename has shown nothing reads it. Remove this rule if your project drops columns behind a feature flag.",
+      "forbid": true,
+      "select": {
+        "kind": "drop_column"
+      },
+      "examples": {
+        "fires": [
+          "ALTER TABLE shop.orders DROP COLUMN channel;",
+          "ALTER TABLE shop.orders DROP COLUMN IF EXISTS channel, ADD COLUMN channel_code TEXT;"
+        ],
+        "silent": [
+          "ALTER TABLE shop.orders ADD COLUMN channel TEXT;",
+          "ALTER TABLE shop.orders ALTER COLUMN channel DROP NOT NULL;"
+        ]
+      }
+    },
+    {
+      "id": "new-not-null-column-needs-a-default",
+      "severity": "high",
+      "target": "column",
+      "title": "A column is added NOT NULL with no DEFAULT",
+      "detail": "The statement fails on any table that already has rows, and in a release it fails after the deploy has started, on the largest table in the batch. The schema it leaves behind looks correct, so the failure only lands in production.",
+      "fix": "Add a DEFAULT, or add the column nullable, backfill, then set NOT NULL in a later release.",
+      "forbid": true,
+      "select": {
+        "added_by_change": true,
+        "nullable": false,
+        "has_default": false
+      },
+      "examples": {
+        "fires": [
+          "ALTER TABLE shop.orders ADD COLUMN channel TEXT NOT NULL;"
+        ],
+        "silent": [
+          "ALTER TABLE shop.orders ADD COLUMN channel TEXT NOT NULL DEFAULT 'web';",
+          "ALTER TABLE shop.orders ADD COLUMN channel TEXT;"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "rulepack": "table-hygiene",
+  "version": 1,
+  "applies_to": [
+    "ddl",
+    "schema"
+  ],
+  "rules": [
+    {
+      "id": "table-must-have-primary-key",
+      "severity": "high",
+      "target": "table",
+      "title": "Table has no primary key",
+      "detail": "Without a primary key there is no way to address one row. A deduplication step has nothing to group on, a backfill UPDATE cannot be scoped, and a replica identity cannot be set — so the change that needs it fails later, on a table that already has production rows.",
+      "fix": "Add a primary key. If the table is deliberately key-less (a log or a staging table), say so in its comment and remove this rule for that table with a `select` clause.",
+      "select": {
+        "created_by_change": true
+      },
+      "assert": [
+        {
+          "field": "primary_key_columns",
+          "op": "present"
+        }
+      ],
+      "examples": {
+        "fires": [
+          "CREATE TABLE shop.orders (id BIGINT, paid_at TIMESTAMPTZ);"
+        ],
+        "silent": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, paid_at TIMESTAMPTZ);",
+          "CREATE TABLE shop.orders (id BIGINT NOT NULL, paid_at TIMESTAMPTZ, PRIMARY KEY (id));",
+          "ALTER TABLE shop.orders ADD CONSTRAINT pk_orders PRIMARY KEY (id);"
+        ]
+      }
+    },
+    {
+      "id": "table-must-have-comment",
+      "severity": "medium",
+      "target": "table",
+      "title": "Table has no comment",
+      "detail": "A table with no comment is a bag of column names. This is where a model asked for \"recent orders\" picks the archive table: the schema says nothing about which one is live.",
+      "fix": "One line on what the table holds and whether it is live or archived.",
+      "select": {
+        "created_by_change": true
+      },
+      "assert": [
+        {
+          "field": "comment",
+          "op": "present"
+        }
+      ],
+      "examples": {
+        "fires": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY);"
+        ],
+        "silent": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY); COMMENT ON TABLE shop.orders IS '订单主表 用途:支付事实 在线';"
+        ]
+      }
+    },
+    {
+      "id": "table-comment-states-role",
+      "severity": "low",
+      "target": "table",
+      "title": "Table comment does not state what the table is for",
+      "detail": "A comment that is a restatement of the name carries no information. What a reader — a person or a model — needs from it is the purpose and whether the rows are current.",
+      "fix": "Say what the table is for, and whether it is live or archived. Delete this rule if your project documents that elsewhere.",
+      "select": {
+        "comment_present": true
+      },
+      "assert": [
+        {
+          "field": "comment",
+          "op": "matches_all",
+          "value": [
+            "(用途|说明|简介)",
+            "(在线|归档|历史|live|archived)"
+          ]
+        }
+      ],
+      "examples": {
+        "fires": [
+          "CREATE TABLE t (id INT PRIMARY KEY); COMMENT ON TABLE t IS '订单主表';",
+          "CREATE TABLE t (id INT PRIMARY KEY); COMMENT ON TABLE t IS '订单主表 用途:支付事实';"
+        ],
+        "silent": [
+          "CREATE TABLE t (id INT PRIMARY KEY); COMMENT ON TABLE t IS '订单主表 用途:支付事实 在线';"
+        ]
+      }
+    },
+    {
+      "id": "column-must-have-comment",
+      "severity": "low",
+      "target": "column",
+      "title": "Column has no comment",
+      "detail": "Coded values, units and nullable fields stay invisible. A nullable key column with no comment reads as an ordinary key, and the join over it drops rows without an error.",
+      "fix": "Comment at least the status, type and nullable columns. Narrow `select` if some tables are documented elsewhere.",
+      "select": {},
+      "assert": [
+        {
+          "field": "comment",
+          "op": "present"
+        }
+      ],
+      "examples": {
+        "fires": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, channel TEXT);"
+        ],
+        "silent": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, channel TEXT); COMMENT ON COLUMN shop.orders.id IS '主键'; COMMENT ON COLUMN shop.orders.channel IS '下单渠道 标准:CH-002';"
+        ]
+      }
+    },
+    {
+      "id": "column-comment-cites-standard",
+      "severity": "medium",
+      "target": "column",
+      "title": "Column comment does not cite the data standard",
+      "detail": "A comment describes a column. A standard ID makes it governable: the value set, the unit and the owner live somewhere a reviewer can look up, and a comment that cites a standard can be checked against it instead of being taken on trust.",
+      "fix": "Add 标准：<ID> to the column comment, where ID names an entry in the project's data standard.",
+      "select": {
+        "comment_present": true
+      },
+      "assert": [
+        {
+          "field": "comment",
+          "op": "matches",
+          "value": "(?i)(标准|standard)\\s*[:：]\\s*[A-Z]{2,6}-\\d{1,4}"
+        }
+      ],
+      "examples": {
+        "fires": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, paid_at TIMESTAMPTZ); COMMENT ON COLUMN shop.orders.paid_at IS '支付时间';"
+        ],
+        "silent": [
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, paid_at TIMESTAMPTZ); COMMENT ON COLUMN shop.orders.paid_at IS '支付时间 标准:TS-004';",
+          "CREATE TABLE shop.orders (id BIGSERIAL PRIMARY KEY, channel TEXT); COMMENT ON COLUMN shop.orders.channel IS '渠道 Standard: CH-002';"
+        ]
+      }
+    }
+  ]
+}

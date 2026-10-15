@@ -5,10 +5,13 @@ every check and the guardrail are pure functions, so they behave identically wit
 any model, or with no model at all.  The agent is the half allowed to be wrong.
 
 Public surface:
-    parse_ddl(text)  -> Schema          (read a schema definition)
+    parse_ddl(text)  -> Schema          (a script as a schema, plus its change actions)
     analyze(schema)  -> list[Finding]   (the schema checks)
     check_sql(schema, sql) -> SqlReview (the statement checks: reports, never decides)
     guard(sql)       -> GuardResult     (the seven-layer guardrail)
+    load_rulepack(path, verify=True) -> dict   (a review rule, as a file)
+    review_ddl(packs, text) -> RuleReport      (apply rules to somebody else's script)
+    vocabulary()     -> dict            (the closed fact vocabulary, for authoring)
     Embedder         -> text -> vector  (offline hash, or any OpenAI-compatible API)
     JsonStore/PgStore                   (the knowledge layer, two backends)
     Toolbox                             (the four tools, all behind guard())
@@ -17,17 +20,21 @@ Public surface:
 
 from .checks import Finding, analyze, summarize
 from .checks_sql import SqlReview, check_sql, run_sql_selftest  # noqa: F401
-from .ddl import Column, Schema, Table, parse_ddl
+from .ddl import Change, Column, Schema, Table, parse_ddl
 from .guard import GuardResult, guard, run_selftest
 from .knowledge import (Chunk, Embedder, Hit, JsonStore, PgStore,  # noqa: F401
                         chunk_markdown, cosine, embed_offline,
                         estimate_tokens, ingest_directory, read_corpus)
+from .rulepack import (RulePackError, RuleReport, load_rulepack,  # noqa: F401
+                       review_ddl, run_rulepack, run_rulepack_selftest,
+                       verify_rulepack, vocabulary)
 from .tools import TOOL_SPECS, Toolbox, ToolResult                 # noqa: F401
 
 __all__ = [
     "Column",
     "Table",
     "Schema",
+    "Change",
     "parse_ddl",
     "Finding",
     "analyze",
@@ -38,6 +45,14 @@ __all__ = [
     "GuardResult",
     "guard",
     "run_selftest",
+    "RuleReport",
+    "RulePackError",
+    "load_rulepack",
+    "verify_rulepack",
+    "run_rulepack",
+    "review_ddl",
+    "run_rulepack_selftest",
+    "vocabulary",
     "Chunk",
     "Hit",
     "Embedder",
