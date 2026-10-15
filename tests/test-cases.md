@@ -23,7 +23,8 @@
 | J. SQL 语义检查 | 11 | 0 | 11 PASS |
 | K. 规则包 | 10 | 0 | 10 PASS |
 | L. 规则推断与事实归一 | 12 | 1（L0 首跑断言写错） | 12 PASS |
-| **合计** | **119** | **11** | **119 PASS** |
+| M. 活库事实与索引归一 | 10 | 1（M1 首跑断言写错） | 10 PASS |
+| **合计** | **129** | **12** | **129 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
@@ -33,6 +34,10 @@ K0–K9 随规则包（`schemafence/rulepack.py`、`rules/*.json`、`python -m s
 L0–L11 随事实注册表（`schemafence/facts.py`）与 `--infer` 一起进来（见 §L）。L0 首跑是
 **用例自身写错**：断言「整行相同」，而第四个写法确实多了一条 `ALTER` 动作，`change_count`
 本就该不同；归一的是规则读的那个事实，不是整行。
+M0–M9 随 `catalog` 事实模型（`snapshot.py` 的 `build_schema`/`apply_script`）与
+`rules/index-hygiene.json` 一起进来（见 §M）。M1 首跑同样是**用例自身写错**：把
+`CREATE UNIQUE INDEX` 也当成「主键/唯一约束的又一种写法」，可它不挂约束——`from_constraint`
+本来就该是 `False`。规格该说的是「同一列同一序同一个索引」，「有没有约束」是另一件事。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -239,10 +244,10 @@ J4/J5/J6 是这一层最容易被写坏的三个反例：**膨胀侧自己的度
 
 | 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
 |---|---|---|---|---|---|---|
-| K0 | 内置自检 | `rules/` 下两个包存在 | `run_rulepack_selftest()` | 13 例全过 | 13/13 | PASS |
+| K0 | 内置自检 | `rules/` 下三个包存在 | `run_rulepack_selftest()` | 15 例全过 | 15/15 | PASS |
 | K1 | 接线 | 两个已发布的包 | `--rules table-hygiene --rules change-review --ddl examples/change_script_review.sql` | 两个包各自 `examples verified`，9 条 finding，`worst high`，rc=1 | rc=1 | PASS |
 | K2 | 自证 | 同上 | `--rules table-hygiene --verify` | 14 例全过，rc=0 | `14 example(s) → all passed` | PASS |
-| K3 | 词表导出 | 无 | `--vocabulary` | rc=0，JSON 含三个 target 与 `authoring_contract` | `targets=['change','column','table']` | PASS |
+| K3 | 词表导出 | 无 | `--vocabulary` | rc=0，JSON 含四个 target 与 `authoring_contract` | `targets=['change','column','index','table']` | PASS |
 | K4 | 反例 | 一份每条规则都满足的脚本 | `--rules table-hygiene --ddl k-clean.sql` | 0 finding，rc=0，仍打印每个规则匹配了多少行 | rc=0 | PASS |
 | K5 | 边界 | 一份没人读得懂的脚本（`\copy` / `VACUUM FULL`） | `--ddl k-blind.sql` | rc=2，打印 `NOTHING RECOGNISED`，**不打印 `0 finding(s)`** | rc=2 | PASS |
 | K6 | 拒收 | 把 `silent` 例子换成会命中的脚本 | `--rules k-broken.json --ddl …` | rc=2，报 `failed its own examples`，规则不生效 | rc=2 | PASS |
@@ -295,6 +300,56 @@ L8–L11 是「自动去重」的落地：完全重复**拒收**（会让同一�
 包含与冲突**出声但不拒收**（可能是刻意的措辞或严重度差异），跨包同 id 也报，
 因为 finding 只带 id，两条规则共用一个 id 在输出里分不开。
 
+## M. 活库事实与索引归一（第五种写法，以及必须查活库的那类规则）
+
+主键只是例子。真正的要求是：**我说「加一条主键规则」，服务就得认得所有加主键的写法**。
+同一个问题换个事实（索引）更狠——一个索引有五种写法：列级 `UNIQUE`、表内 `UNIQUE (a)`、
+命名约束 `CONSTRAINT uq UNIQUE (a)`、事后 `ALTER TABLE … ADD CONSTRAINT`、以及
+`CREATE UNIQUE INDEX`。第五种写法不是语句，是**活库**：`pg_index` 是同一件事的另一个读者。
+
+第二层要求更关键：**「不能给表加重复索引」这种规则，只查脚本是答不出来的**。脚本只知道
+自己建的索引，表上早就有的那个只有在库里。所以这一节验两件事：事实层把五种写法读成同一个
+事实；而需要活库的规则在只拿到脚本时**必须拒绝应用**，不许静静报 0 条。
+
+规则侧因此多了一层：`applies_to` 从「说明书」变成「执行条件」。包里写
+`["catalog"]`，喂它一份脚本就 `WAS NOT APPLIED`，并告诉你哪条命令能给到事实，退出码 2。
+规则没能被求值，就等于什么都没通过——这跟「0 finding 不是通过」是同一条纪律。
+
+「查知识库」在这里的位置也要说清：**语料给的是写法清单，不是运行时输入**。手册里每一种
+写索引/写键的方式变成 §M 里的一个用例，读者必须把它们读成一个事实。检索是概率的，这一层
+不允许是——所以文档只产出**测试**。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| M1 | 事实归一 | 4 种约束写法 + 1 种 `CREATE UNIQUE INDEX` + 1 行活库返回 | `rows_for("index", parse_ddl(…))/build_schema(…)` | 4 种约束写法与活库行**每个字段相同**；`CREATE UNIQUE INDEX` 只差 `from_constraint`；`created_here` 脚本侧全 True、活库侧 False | `differs=['from_constraint']` | PASS |
+| M2 | 端到端 | 活库快照（已有 `idx_orders_paid_at`）+ 脚本新建同名同列索引 | `apply_script(snapshot, parse_ddl(…))` → `review_schema([index-hygiene], …)` | 脚本那条被并进事实，2 条 finding，且 `{duplicate_of}` 在 detail 里被填成对方的索引名 | 1 added, 2 finding(s) | PASS |
+| M3 | 反例 | 同列不同序 / 不同 method / 不同 partial 谓词 / 表达式键 | 读 `duplicate_count` | 前三种都不算重复；`(a)` 全量 vs `(a) WHERE a>0` 只报 partial 那条（全量的覆盖它，反之不成立） | `order=[0,0] partial={'i1':0,'i2':1}` | PASS |
+| M4 | 执行条件 | `rules/index-hygiene.json`（`applies_to=["catalog"]`） | `--rules index-hygiene --ddl m-script.sql` | rc=2，打印 `WAS NOT APPLIED`，给出 `--db` 提示，**不打印 `no rule fired`** | rc=2 | PASS |
+| M5 | 自证 | 同上 | `--rules index-hygiene --verify` | 5 例全过（含「同列不同序」这条近失），rc=0 | `5 example(s) → all passed` | PASS |
+| M6 | 缺口可见 | 无 | `--facts` | `catalog` 列为已建；`index` target 标注 read from `ddl, schema, catalog` | rc=0 | PASS |
+| M7 | 边界 | 空活库 + 一份建新表的脚本 | `apply_script(build_schema(), …)` | 索引不并入（0 条），新表名被记入 `new_tables` 供上报表 | `indexes=0 new_tables=['shop.new']` | PASS |
+| M8 | 描述→规则 | `examples/rule-request-duplicate-index.json`（2 fires / 2 silent） | `--infer … --write`，再 `--rules <包> --ddl` | 首选 `duplicate_count lte 0`；`applies_to` 由请求带出为 `["catalog"]`；写盘 rc=0，拿脚本去用 rc=2（该拒就拒） | `first=[{duplicate_count lte 0}]` | PASS |
+| M9 | 不撒谎 | 一个连不上的 DSN | `--db postgresql://nobody@127.0.0.1:1/none?connect_timeout=2` | rc=2，打印 `no rule was applied`，**不打印 `0 finding(s)` / `no rule fired`** | rc=2 | PASS |
+| M10 | 词表导出 | 无 | `--vocabulary` | `applies_to` 含 `catalog`；`index` target 含 `duplicate_count`；`finding_text` 说明 `{field}` | `applies_to=['ddl','schema','catalog']` | PASS |
+
+M3 是这一节的牙齿。**«同列不同列序» 恰恰是最常见的误报来源**：`(a, b)` 和 `(b, a)` 是两个
+不同的索引，只有前者能服务 `a` 的等值查询。同样，`lower(email)` 与 `email` 不是同一个键——
+所以表达式键**从不参与比较**，它照常出行，只是永远不被算成「别人的重复」。少报是漏一条
+finding，误报是把两个不同的东西说成一个，后者会直接毁掉审阅者对工具的信任。
+
+M8 与 §L 的 L4 是同一个论断的第二次出现：**描述 + 例子 → 规则文件 → 立刻能审**。区别只在
+这次规则要的是活库事实，于是 `applies_to` 一路从请求文件带进包里，`--ddl` 会拒绝它——
+自动生成出来的规则同样要接受「执行条件」的约束，而不是绕过去。
+
+M9 是这一层最容易写成假绿的地方：连不上库的时候，最像样的输出应该是退出码 2 加一句
+「什么都没读、什么都没应用」，而不是一行 `0 finding(s)`。
+
+**这一节没验的部分**：`INDEXES_SQL` 本身（`pg_index` + `unnest(indkey::int2[]) WITH ORDINALITY`
++ `indnkeyatts`）**还没有在真库上跑过**——本机没有 PostgreSQL，VM 上是下一步。被验证的是
+决定性的那一半：活库行与脚本行经同一个 `build_schema`/`rows_for` 出口，字段逐个相同（M1），
+所以规则分不出自己在读哪一边。真库要验的是另一半：那条查询在 PG16 上返回的行，形状与
+M1 里手写的那一行一致。
+
 ## 已知约定核对
 
 | 约定 | 核对结论 |
@@ -306,6 +361,8 @@ L8–L11 是「自动去重」的落地：完全重复**拒收**（会让同一�
 | 多来源标注 `甲 / 乙` 命中任一即算命中 | 成立。`_gold_sources()` 按 `/` 拆分；第 9 题 `pg-vacuum-tuning / pg-bloat-seq-scan` 在 rank 4 命中计为 hit（D5 汇总内）。 |
 | 「最近的提交 874d7bd、12b9b98、8e36a49 本地未 push」 | **与代码实际不符**：`git branch -vv` 显示 `main` 跟踪 `origin/main` 且 "up to date"；`git log` 顶部为 `8e36a49`。这三条实际已同步到 `origin/main`，并非未 push。未据此改代码。 |
 | 语料规模：knowledge 8 篇 / dba 14 篇 | 成立（ingest 报告 8 篇、14 篇）。 |
+| 已知极限：一条规则只能看一行，那「两行是否重复」怎么办 | 成立，做法是把比较放进事实提供者（`facts.py` 的 `_duplicates`），导出成 `duplicate_count`；规则读到一个数，仍然是纯声明（M3）。 |
+| 规则包能不能要求活库 | 能，且是**强制**的：`applies_to` 与本次事实来源不匹配就不应用、退出码 2（M4/M8），不是文档约定。 |
 
 ## 隐私检查
 

@@ -36,8 +36,9 @@ from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.knowledge import (Chunk, Embedder, JsonStore,    # noqa: E402
                                    chunk_markdown, ingest_directory)
 from schemafence.rulepack import (find_overlaps, infer_rule,      # noqa: E402
-                                  load_rulepack, run_rulepack_selftest,
-                                  vocabulary)
+                                  load_rulepack, review_schema,
+                                  run_rulepack_selftest, vocabulary)
+from schemafence.snapshot import apply_script, build_schema       # noqa: E402
 from schemafence.tools import Toolbox, run_tool_selftest          # noqa: E402
 
 PY = sys.executable
@@ -718,7 +719,7 @@ def rulepack_cases() -> None:
     "0 finding(s)" — the one output that reads as approval.
     """
     print("\n[K] rule packs — a rule as a file, applied to somebody else's script")
-    selftest_check("K0", "run_rulepack_selftest() 13 cases all pass", run_rulepack_selftest)
+    selftest_check("K0", "run_rulepack_selftest() 15 cases all pass", run_rulepack_selftest)
 
     hygiene = str(ROOT / "rules" / "table-hygiene.json")
     change = str(ROOT / "rules" / "change-review.json")
@@ -743,7 +744,8 @@ def rulepack_cases() -> None:
     except json.JSONDecodeError:
         vocab = {}
     check("K3", "`--vocabulary` exports the closed vocabulary as the authoring prompt",
-          p.returncode == 0 and set(vocab.get("targets", {})) == {"table", "column", "change"}
+          p.returncode == 0
+          and set(vocab.get("targets", {})) == {"table", "column", "change", "index"}
           and "authoring_contract" in vocab,
           f"rc={p.returncode} targets={sorted(vocab.get('targets', {}))}")
 
@@ -960,6 +962,166 @@ def inference_cases() -> None:
           f"rc={p.returncode}")
 
 
+def catalogue_cases() -> None:
+    """An index is one fact written five ways, and one of the five is a database.
+
+    "No table may carry two indexes on the same columns, in the same order" is
+    the rule a reviewer actually asks for, and it cannot be answered from a
+    script: only the catalog knows the indexes the table already has.  These
+    cases hold the three claims that makes: the spellings collapse to one fact,
+    the catalog reaches the same fact as the reader does, and a rule that needs
+    the catalog is refused over a script instead of reported clean.
+    """
+    print("\n[M] the catalog — the fifth spelling, and the rule that needs it")
+    hygiene = str(ROOT / "rules" / "index-hygiene.json")
+
+    # M1  six spellings of one index, five from a script and one from a catalog
+    spellings = [
+        "CREATE TABLE shop.t (a INT UNIQUE);",
+        "CREATE TABLE shop.t (a INT, UNIQUE (a));",
+        "CREATE TABLE shop.t (a INT, CONSTRAINT uq_t_a UNIQUE (a));",
+        "CREATE TABLE shop.t (a INT); ALTER TABLE shop.t ADD CONSTRAINT uq_t_a UNIQUE (a);",
+        "CREATE TABLE shop.t (a INT); CREATE UNIQUE INDEX uq_t_a ON shop.t (a);",
+    ]
+    shared = ("columns", "columns_text", "column_count", "unique", "primary",
+              "from_constraint", "method", "comparable", "duplicate_count")
+    rows = [rows_for("index", parse_ddl(sql))[0] for sql in spellings]
+    # What the catalog returns for the same index, in the shape psycopg hands back
+    # (…, is_unique, is_primary, method, from_constraint, columns, expressions,
+    #  is_partial, predicate) — the reader is not trusted to be the only one.
+    rows.append(rows_for("index", build_schema(
+        table_rows=[("shop", "t", None)],
+        column_rows=[("shop", "t", "a", "integer", False, None, None, False, None)],
+        index_rows=[("shop", "t", "uq_t_a", True, False, "btree", True, ["a"], 0,
+                     False, None)]))[0])
+    same = all(all(row[key] == rows[0][key] for key in shared)
+               for row in rows[:4] + [rows[5]])
+    # `CREATE UNIQUE INDEX` is the same index and not the same constraint:
+    # dropping the constraint's index drops the constraint, so the reader keeps
+    # the two apart.  That one field is the whole difference.
+    differs = {key for key in shared if rows[4][key] != rows[0][key]}
+    provenance = [row["created_here"] for row in rows]
+    check("M1", "one concept, one place: four constraint spellings and the catalog "
+                "read as one index fact, and a bare unique index differs only in "
+                "the constraint it does not have",
+          same and differs == {"from_constraint"} and provenance == [True] * 5 + [False],
+          f"identical={same} differs={sorted(differs)} "
+          f"created_here={provenance} columns={rows[0]['columns']}")
+
+    # M2  the catalog, then the script — and the finding names the other index
+    catalog = build_schema(
+        table_rows=[("shop", "orders", "订单主表 用途:支付事实 在线")],
+        column_rows=[("shop", "orders", "paid_at", "timestamptz", True, None, None,
+                      False, None)],
+        index_rows=[("shop", "orders", "idx_orders_paid_at", False, False, "btree",
+                     False, ["paid_at"], 0, False, None)])
+    script = parse_ddl("CREATE INDEX idx_orders_paid_at_2 "
+                       "ON shop.orders (paid_at);")
+    applied = apply_script(catalog, script)
+    pack = load_rulepack(hygiene, verify=True)
+    report = review_schema([pack], catalog)
+    detail = report.findings[0].detail if report.findings else ""
+    check("M2", "a script adds an index the catalog already has on that key: the "
+                "finding names the index it repeats",
+          applied.indexes == 1 and len(report.findings) == 2
+          and "idx_orders_paid_at" in detail and "{" not in detail,
+          f"{applied.indexes} added, {len(report.findings)} finding(s), "
+          f"subjects={sorted(f.subject for f in report.findings)}")
+
+    # M3  the near misses the rule was written around
+    def counts(sql):
+        return [(r["name"], r["duplicate_count"])
+                for r in rows_for("index", parse_ddl(sql)) if r["table"] == "shop.t"]
+
+    order = counts("CREATE TABLE shop.t (a INT, b INT);"
+                   "CREATE INDEX i1 ON shop.t (a, b);"
+                   "CREATE INDEX i2 ON shop.t (b, a);")
+    methods = counts("CREATE TABLE shop.t (a INT);"
+                     "CREATE INDEX i1 ON shop.t (a);"
+                     "CREATE INDEX i2 ON shop.t USING hash (a);")
+    partial = counts("CREATE TABLE shop.t (a INT);"
+                     "CREATE INDEX i1 ON shop.t (a);"
+                     "CREATE INDEX i2 ON shop.t (a) WHERE a > 0;")
+    expression = counts("CREATE TABLE shop.t (a INT);"
+                        "CREATE INDEX i1 ON shop.t (a);"
+                        "CREATE INDEX i2 ON shop.t (lower(a));")
+    check("M3", "the same columns in the other order are two indexes, and a "
+                "different method, a different predicate or an expression is not a "
+                "duplicate",
+          [n for _name, n in order] == [0, 0]
+          and [n for _name, n in methods] == [0, 0]
+          and [n for _name, n in expression] == [0, 0]
+          and dict(partial) == {"i1": 0, "i2": 1},
+          f"order={order} methods={methods} partial={partial} expression={expression}")
+
+    # M4  the pack that needs the catalog, and a run that did not read one
+    script_file = TMP / "m-script.sql"
+    script_file.write_text("CREATE TABLE shop.orders (id BIGSERIAL, paid_at TIMESTAMPTZ);\n"
+                           "CREATE INDEX idx_orders_paid_at ON shop.orders (paid_at);\n",
+                           encoding="utf-8")
+    p = review_cli(["--rules", hygiene, "--ddl", str(script_file)])
+    check("M4", "a pack that declares applies_to catalog is refused over a script, "
+                "and says which command would supply the facts",
+          p.returncode == 2 and "WAS NOT APPLIED" in p.stdout
+          and "--db" in p.stdout and "no rule fired" not in p.stdout,
+          f"rc={p.returncode}")
+
+    p = review_cli(["--rules", hygiene, "--verify"])
+    check("M5", "the pack's own examples are the acceptance test for the rule",
+          p.returncode == 0 and "5 example(s) → all passed" in p.stdout,
+          f"rc={p.returncode}")
+
+    p = review_cli(["--facts"])
+    check("M6", "`--facts` lists the catalog model as built, and the index target "
+                "as read from it",
+          p.returncode == 0 and "catalog" in p.stdout
+          and "index" in p.stdout and "ddl, schema, catalog" in p.stdout,
+          f"rc={p.returncode}")
+
+    # M7  a table the catalog has never seen is counted, not silently merged
+    fresh = apply_script(build_schema(), parse_ddl(
+        "CREATE TABLE shop.new (a INT); CREATE INDEX i ON shop.new (a);"))
+    check("M7", "an index on a table the catalog does not have is reported as "
+                "uncompared rather than merged into it",
+          fresh.indexes == 0 and fresh.new_tables == ["shop.new"],
+          f"indexes={fresh.indexes} new_tables={fresh.new_tables}")
+
+    # M8  the same rule, inferred from the description and its examples
+    request = str(ROOT / "examples" / "rule-request-duplicate-index.json")
+    out = infer_rule(json.loads(Path(request).read_text(encoding="utf-8")))
+    first = out["candidates"][0] if out["candidates"] else {}
+    written = TMP / "m-inferred.json"
+    p = review_cli(["--infer", request, "--limit", "1", "--write", str(written)])
+    q = review_cli(["--rules", str(written), "--ddl", str(script_file)])
+    check("M8", "described in a sentence and two examples, the rule comes back as "
+                "the count assertion a DBA would write, and carries applies_to",
+          first.get("assert") == [{"field": "duplicate_count", "op": "lte", "value": 0}]
+          and out["applies_to"] == ["catalog"]
+          and p.returncode == 0 and json.loads(written.read_text(encoding="utf-8")
+                                               )["applies_to"] == ["catalog"]
+          and q.returncode == 2,
+          f"first={first.get('assert')} applies_to={out['applies_to']} "
+          f"write rc={p.returncode} review rc={q.returncode}")
+
+    # M9  a catalog that cannot be reached is not a clean script
+    p = review_cli(["--rules", hygiene,
+                    "--db", "postgresql://nobody@127.0.0.1:1/none?connect_timeout=2"])
+    check("M9", "a catalog that cannot be reached exits 2 and never prints a clean "
+                "verdict",
+          p.returncode == 2 and "no rule was applied" in p.stdout
+          and "no rule fired" not in p.stdout and "0 finding(s)" not in p.stdout,
+          f"rc={p.returncode}")
+
+    # M10  the exported vocabulary carries the new facts and the new syntax
+    vocab = vocabulary()
+    check("M10", "the vocabulary exports the index facts, the catalog model and "
+                 "`{field}` in a finding's text",
+          "catalog" in vocab["applies_to"] and "index" in vocab["targets"]
+          and "duplicate_count" in vocab["targets"]["index"]
+          and "{field}" in vocab["finding_text"]["path"],
+          f"applies_to={vocab['applies_to']}")
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -974,6 +1136,7 @@ def main() -> int:
     sql_semantics_cases()
     rulepack_cases()
     inference_cases()
+    catalogue_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)
