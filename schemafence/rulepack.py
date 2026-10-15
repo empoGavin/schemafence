@@ -80,10 +80,20 @@ AUTHORING_CONTRACT = [
     "at load time with the field and the rule named, not ignored at runtime.",
     "Because the vocabulary is closed, a rule that needs a new field is a change",
     "to the reader, not to the file: say so instead of inventing a field name.",
+    "`applies_to` says which facts the pack may be applied to. A pack that asks",
+    "for the catalogue is refused over a script, because a script knows only the",
+    "indexes it creates and the catalogue knows the ones already on the table.",
+    "In title, detail and fix, {field} is replaced by that field on the row that",
+    "failed — use it to name the other row, as {duplicate_of} does.",
     "Read this and write the rule, or write only the title, the examples and the",
     "severity and let the evaluator search for the facts that fit: --infer does",
     "that offline, and both routes end at load_rulepack's example gate.",
 ]
+
+# `{duplicate_of}`, not `{anything}`: a detail that quotes a JSON fragment keeps
+# working, and a misspelled field is still refused by name.
+PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+
 
 
 class RulePackError(ValueError):
@@ -103,6 +113,23 @@ def _truthy(value) -> bool:
 
 def _as_text(value) -> str:
     return value if isinstance(value, str) else ("" if value is None else str(value))
+
+
+def _render(text: str, row: dict) -> str:
+    """Fill ``{field}`` from the row the rule fired on.
+
+    "This index is a duplicate" is a finding somebody has to go and chase; the
+    same sentence with the name of the other index is one they can act on.  A
+    field with no value renders as nothing, and an unknown name never reaches
+    here — ``validate_rulepack`` refused it by name at load.
+    """
+    def value(match: re.Match) -> str:
+        found = row.get(match.group(1))
+        if isinstance(found, (list, tuple)):
+            return ", ".join(_as_text(item) for item in found)
+        return _as_text(found)
+
+    return PLACEHOLDER.sub(value, text)
 
 
 def _split_key(key: str) -> tuple[str, str | None]:
@@ -265,6 +292,10 @@ def validate_rulepack(pack: dict) -> dict:
         for key in ("title", "detail", "fix"):
             _require(isinstance(rule.get(key), str) and rule[key].strip(),
                      f"{where}: `{key}` is required")
+            for name in PLACEHOLDER.findall(rule[key]):
+                _require(name in FIELDS()[target],
+                         f"{where}: `{key}` fills {{{name}}} from the row, but this "
+                         f"target does not provide a field called `{name}`")
         offered = set(models_for(target))
         _require(bool(offered & set(applies)),
                  f"{where}: target `{target}` is read from "
@@ -326,9 +357,10 @@ def _run_one_rule(rule: dict, schema: Schema) -> tuple[list[Finding], list[dict]
             fails = not all(assertion_holds(a, row, where) for a in rule["assert"])
         if fails:
             findings.append(Finding(
-                check=rule["id"], severity=rule["severity"], title=rule["title"],
+                check=rule["id"], severity=rule["severity"],
+                title=_render(rule["title"], row),
                 subject=subject_of(target, row),
-                detail=rule["detail"], fix=rule["fix"]))
+                detail=_render(rule["detail"], row), fix=_render(rule["fix"], row)))
     return findings, rows, matched
 
 
@@ -523,21 +555,49 @@ class RuleReport:
     applied: list[dict] = field(default_factory=list)
     #        {id, title, target, matched, findings}
     blind: bool = False
+    unapplied: list[str] = field(default_factory=list)
+    #           packs whose declared fact model is not the one these facts came
+    #           from.  Not the same as blind: the file was read fine, the rules
+    #           were not applied to it, and neither is a pass.
     statements: int = 0
     tables: int = 0
     columns: int = 0
     changes: int = 0
+    indexes: int = 0
+    origin: str = "ddl"
     unread: list[tuple[int, str, str]] = field(default_factory=list)
+
+
+# What to do when a pack asks for facts this run did not read.  A refusal that
+# does not say which command would answer it is just an error message.
+ORIGIN_ADVICE = {
+    "catalog": ("these facts came from the catalog, which has no statement list — a "
+                "rule over change actions has nothing to read here"),
+    "ddl": ("these facts came from a script, which knows only the statements it "
+            "contains. What a table already holds is in the catalog: read it with "
+            "`--db <dsn>`"),
+    "schema": ("these facts are a schema on its own, with no statement list"),
+}
 
 
 def run_rulepack(pack: dict, schema: Schema) -> RuleReport:
     """Apply one pack to one parsed script.  Pure: no model, no network, no clock."""
     report = RuleReport(pack_id=pack["rulepack"], pack_version=pack["version"],
-                        packs=[pack["rulepack"]])
+                        packs=[pack["rulepack"]], origin=schema.origin)
+    models = pack.get("applies_to", ["ddl"])
+    if schema.origin not in models:
+        report.unapplied.append(pack["rulepack"])
+        report.notes.append(
+            f"`{pack['rulepack']}` WAS NOT APPLIED — it declares applies_to "
+            f"{models} and these facts were read from `{schema.origin}`: "
+            + ORIGIN_ADVICE.get(schema.origin, ""))
+        return report
+
     report.statements = schema.statements
     report.tables = len(schema.tables)
     report.columns = schema.column_count
     report.changes = len(schema.changes)
+    report.indexes = sum(len(t.indexes) for t in schema.tables)
     report.unread = list(schema.unread)
 
     for position, head, why in schema.unread:
@@ -603,11 +663,11 @@ def merge_reports(reports: list[RuleReport]) -> RuleReport:
             merged.notes.append(f"{report.pack_id}: {note}")
         merged.applied.extend(dict(row, pack=report.pack_id) for row in report.applied)
         merged.blind = merged.blind or report.blind
+        merged.unapplied.extend(report.unapplied)
         merged.unread.extend(report.unread)
-    merged.statements = reports[0].statements if reports else 0
-    merged.tables = reports[0].tables if reports else 0
-    merged.columns = reports[0].columns if reports else 0
-    merged.changes = reports[0].changes if reports else 0
+    # The statement and table counts are not summed here: they describe the
+    # facts, not the packs applied to them, and only the caller that read the
+    # facts knows them.  ``review_schema`` fills them in.
     seen, unique = set(), []
     for finding in merged.findings:
         key = (finding.check, finding.subject)
@@ -620,12 +680,30 @@ def merge_reports(reports: list[RuleReport]) -> RuleReport:
     return merged
 
 
-def review_ddl(packs: list[dict], text: str) -> RuleReport:
-    """Parse a script once, apply every pack.  The whole review path."""
-    schema = parse_ddl(text)
+def review_schema(packs: list[dict], schema: Schema) -> RuleReport:
+    """Apply every pack to one already-read Schema.
+
+    The half ``review_ddl`` reuses.  A caller that read the facts itself — from
+    a live catalogue, say — has no reason to re-parse anything.
+
+    The counts come from the schema rather than from the reports, so a pack
+    that was refused for asking the wrong fact model does not make a file that
+    was read look like a file that was empty.
+    """
     merged = merge_reports([run_rulepack(pack, schema) for pack in packs])
+    merged.statements = schema.statements
+    merged.tables = len(schema.tables)
+    merged.columns = schema.column_count
+    merged.changes = len(schema.changes)
+    merged.indexes = sum(len(t.indexes) for t in schema.tables)
+    merged.origin = schema.origin
     merged.notes.extend(cross_pack_notes(packs))
     return merged
+
+
+def review_ddl(packs: list[dict], text: str) -> RuleReport:
+    """Parse a script once, apply every pack.  The whole review path."""
+    return review_schema(packs, parse_ddl(text))
 
 
 def vocabulary() -> dict:
@@ -654,15 +732,20 @@ def vocabulary() -> dict:
         "assertion_ops": list(ASSERT_OPS),
         "severities": ["high", "medium", "low"],
         "change_kinds": list(CHANGE_KINDS),
-        "applies_to": ["ddl", "schema"],
+        "applies_to": [model for model, reason in FACT_MODELS.items() if reason is None],
+        "finding_text": {
+            "note": "title, detail and fix are shown with the row that failed",
+            "path": {"{field}": "that field on the failing row, e.g. {duplicate_of}"},
+        },
         "rule_pack": {
             "rulepack": "a name, e.g. table-hygiene",
             "version": PACK_VERSION,
-            "applies_to": ["ddl"],
+            "applies_to": ["ddl", "catalog — which facts this pack may be applied to; "
+                           "a pack is refused, not silently applied, over another"],
             "rules": [{
                 "id": "lowercase-with-dashes, unique in the file",
                 "severity": "high | medium | low",
-                "target": "table | column | change",
+                "target": " | ".join(TARGETS()),
                 "title": "one line, shown next to the row",
                 "detail": "why it is wrong, in the words a DBA would use",
                 "fix": "what to change",
@@ -732,11 +815,22 @@ def _fires_on(target: str, rows: list[dict], select: dict, assertion: dict) -> i
 
 
 def _rank(target: str, select: dict, assertion: dict) -> tuple:
-    """Prefer the plainest rule that fits: no selector, a boolean fact, `present`."""
+    """Prefer the plainest rule that fits.
+
+    Plainest first means no selector, then a boolean fact over a number, then
+    the earliest operator — with one correction: an operator is scored against
+    the field it is applied to before it is scored by position.  ``absent`` on
+    a number is a way of writing "zero", and a rule that says
+    ``duplicate_count absent`` is a rule somebody has to read twice.
+    """
     kind = FIELDS()[target].get(assertion["field"], "str")
+    op = assertion["op"]
+    fits = op in ("lte", "gte", "equals", "not_equals") if kind == "int" \
+        else op in ("present", "absent")
     return (len(select),
+            0 if fits else 1,
             0 if kind == "bool" else (1 if kind == "int" else 2),
-            ASSERT_OPS.index(assertion["op"]),
+            ASSERT_OPS.index(op),
             assertion["field"])
 
 
@@ -779,6 +873,15 @@ def infer_rule(request: dict, limit: int = 5) -> dict:
     target = request.get("target")
     if target not in TARGETS():
         return {"error": f"target `{target}` — choose one of {', '.join(TARGETS())}"}
+    models = request.get("applies_to") or ["ddl"]
+    if not isinstance(models, list) or not models:
+        return {"error": "`applies_to` is a non-empty list of fact models"}
+    for model in models:
+        if model not in FACT_MODELS:
+            return {"error": f"`applies_to: {model}` — no such fact model; known: "
+                             f"{', '.join(FACT_MODELS)}"}
+        if not is_built(model):
+            return {"error": f"`applies_to: {model}` — {FACT_MODELS[model]}"}
     examples = request.get("examples") or {}
     for label in ("fires", "silent"):
         scripts = examples.get(label)
@@ -820,6 +923,7 @@ def infer_rule(request: dict, limit: int = 5) -> dict:
 
     result: dict = {
         "target": target,
+        "applies_to": models,
         "examples": {label: len(examples[label]) for label in ("fires", "silent")},
         "candidates": candidates,
         "near_misses": misses,
@@ -854,9 +958,10 @@ def _pack(rules: list[dict], **extra) -> dict:
                  "applies_to": ["ddl"], "rules": rules}, **extra)
 
 
-def _specimen(*, target="table", select=None, forbid=None, fires, silent, rid="t") -> dict:
+def _specimen(*, target="table", select=None, forbid=None, fires, silent, rid="t",
+              detail="d") -> dict:
     rule = {"id": rid, "severity": "high", "target": target, "title": "t",
-            "detail": "d", "fix": "f",
+            "detail": detail, "fix": "f",
             "examples": {"fires": fires, "silent": silent}}
     if select is not None:
         rule["select"] = select
@@ -892,7 +997,37 @@ def run_rulepack_selftest() -> tuple[list[tuple[str, str, bool, str]], bool]:
         return " ".join(ids), bool(packs)
 
     case("the shipped packs load, and every one of their examples holds",
-         "2 packs", shipped)
+         "3 packs", shipped)
+
+    def refused_on_unknown_placeholder():
+        try:
+            load_rulepack(_pack([_specimen(fires=["CREATE TABLE t (a INT);"],
+                                           silent=["CREATE TABLE t (a INT);"],
+                                           detail="says {nope}")]))
+        except RulePackError as exc:
+            return str(exc)[:46], "does not provide a field called `nope`" in str(exc)
+        return "loaded", False
+
+    case("a `{field}` that this target does not provide is refused", "no field named",
+         refused_on_unknown_placeholder)
+
+    def placeholder_is_filled_from_the_row():
+        pack = load_rulepack(_pack([
+            {"id": "column-needs-comment", "severity": "low", "target": "column",
+             "title": "no column comment", "detail": "{table}.{name} has none",
+             "fix": "f",
+             "assert": [{"field": "comment", "op": "present"}],
+             "examples": {"fires": ["CREATE TABLE t (a INT);"],
+                          "silent": ["CREATE TABLE t (a INT);"
+                                     "COMMENT ON COLUMN t.a IS 'x';"]}},
+        ]))
+        report = review_ddl([pack], "CREATE TABLE t (a INT);")
+        return (report.findings[0].detail if report.findings else "(none)",
+                len(report.findings) == 1
+                and report.findings[0].detail == "t.a has none")
+
+    case("a finding fills `{field}` from the row it fired on", "t.a has none",
+         placeholder_is_filled_from_the_row)
 
     def refused_when_a_silent_example_fires():
         pack = _pack([_specimen(fires=["CREATE TABLE t (a INT);"],

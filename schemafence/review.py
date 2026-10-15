@@ -5,12 +5,24 @@
     python -m schemafence.review --rules rules/table-hygiene.json --verify
     python -m schemafence.review --vocabulary > vocabulary.json
 
+A rule can also ask for facts a script does not have.  "No table may carry two
+indexes on the same columns, in the same order" is about what the table
+*already* holds, and a script only knows the indexes it creates:
+
+    python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN"
+    python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" \
+                                 --ddl release.sql
+
+The second form reads the catalogue and then the indexes the script adds, so
+the question it answers is the one a reviewer actually has: after this
+migration, will the table carry two indexes on the same key?
+
 Exit codes matter here, because this is meant to sit in a pipeline:
 
     0   read, and no rule fired
     1   read, and at least one rule fired
-    2   could not review — a pack failed its own examples, or the file was
-        read as nothing at all
+    2   could not review — a pack failed its own examples, a pack asked for
+        facts this run did not read, or the file was read as nothing at all
 
 2 is the point of the third code.  A review that understood nothing must not
 be able to print "0 finding(s)" and exit 0, because that reads as approval.
@@ -44,13 +56,18 @@ def heading(text: str) -> None:
 
 def show_identity(packs: list[tuple[Path, dict, list]]) -> None:
     for path, pack, rows in packs:
+        count = len(pack["rules"])
         print(f"rules  : {pack['rulepack']:<24} "
-              f"({len(pack['rules'])} rules, {len(rows)} examples verified)   "
+              f"({count} rule{'s' if count != 1 else ''}, {len(rows)} examples verified)   "
               f"{path.name}")
 
 
 def show_applied(report: RuleReport) -> None:
     heading("what each rule looked at")
+    if not report.applied:
+        print("  no rule was applied. The packs are listed above and the notes")
+        print("  below say why; nothing here cleared anything.")
+        return
     print(f"  {'rule':<44}{'target':<8}{'matched':>7}{'fired':>7}")
     for row in report.applied:
         mark = "" if row["matched"] else "   (nothing matched)"
@@ -77,6 +94,7 @@ def show_findings(report: RuleReport) -> None:
 
 
 def show_inference(result: dict, request_path: Path, write_to: Path | None) -> int:
+    applies_to = result.get("applies_to") or ["ddl"]
     print(f"request: {request_path.name}  →  target {result['target']}, "
           f"{result['examples']['fires']} fires, {result['examples']['silent']} silent")
     print(f"searched: {result['searched']} selection/assertion pair(s) over the "
@@ -92,6 +110,9 @@ def show_inference(result: dict, request_path: Path, write_to: Path | None) -> i
         print("  closest rules that do not separate everything:")
         for miss in result["near_misses"]:
             print(f"    · {json.dumps(miss['assert'], ensure_ascii=False)}")
+            if miss.get("select"):
+                print(f"      selected from "
+                      f"{json.dumps(miss['select'], ensure_ascii=False)}")
             print(f"      separates {miss['separated']}")
     if result.get("note"):
         print()
@@ -103,12 +124,12 @@ def show_inference(result: dict, request_path: Path, write_to: Path | None) -> i
             return 2                      # an empty pack on stdout is an invitation
         print()
         print(json.dumps({"rulepack": request_path.stem, "version": PACK_VERSION,
-                          "applies_to": ["ddl"], "rules": result["candidates"][:1]},
+                          "applies_to": applies_to, "rules": result["candidates"][:1]},
                          indent=2, ensure_ascii=False))
         return 0
 
-    pack = {"rulepack": write_to.stem, "version": PACK_VERSION, "applies_to": ["ddl"],
-            "rules": result["candidates"][:1]}
+    pack = {"rulepack": write_to.stem, "version": PACK_VERSION,
+            "applies_to": applies_to, "rules": result["candidates"][:1]}
     try:
         load_rulepack(pack, verify=True)          # the gate, before anything is written
     except RulePackError as exc:
@@ -133,15 +154,58 @@ def _wrap(text: str, width: int = 64) -> list[str]:
     return lines + ([line] if line else [])
 
 
+def read_catalog(dsn: str):
+    """The catalogue, read-only.  Returns (schema, note) or (None, why not)."""
+    from . import snapshot
+
+    try:
+        conn = snapshot.connect(dsn)
+    except Exception as exc:                          # noqa: BLE001 - reported, not raised
+        return None, f"cannot reach the catalog: {type(exc).__name__}: {exc}"
+    try:
+        return snapshot.read_schema(conn), None
+    except Exception as exc:                          # noqa: BLE001 - a query, not a crash
+        return None, f"the catalog could not be read: {type(exc).__name__}: {exc}"
+    finally:
+        conn.close()
+
+
+def _default_packs(from_catalog: bool) -> list[Path]:
+    """The packs to apply when none were named.
+
+    A script and a catalog are not reviewed by the same rules, so the default
+    follows the facts rather than a fixed filename: a pack that declares
+    ``applies_to: ["catalog"]`` is the one worth running when the facts came
+    from a database, and vice versa.  A file that will not parse is included
+    rather than skipped, so the loader gets to name the problem.
+    """
+    if not from_catalog:
+        return [DEFAULT_RULE_DIR / "table-hygiene.json"]
+    chosen = []
+    for path in sorted(DEFAULT_RULE_DIR.glob("*.json")):
+        try:
+            declared = json.loads(path.read_text(encoding="utf-8")).get("applies_to")
+        except (OSError, json.JSONDecodeError):
+            declared = None
+        if declared is None or "catalog" in declared:
+            chosen.append(path)
+    return chosen
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m schemafence.review",
         description="Review a DDL script against rule packs. Deterministic: no model, "
-                    "no database, no network.")
+                    "no network. With --db, reads a live catalog read-only.")
     parser.add_argument("--rules", action="append", default=None,
-                        help="rule pack JSON (repeatable); default rules/table-hygiene.json")
+                        help="rule pack JSON (repeatable). Default: table-hygiene.json for a "
+                             "script, every pack that declares the catalog model for --db")
     parser.add_argument("--ddl", default=None,
                         help="the script to review; - reads standard input")
+    parser.add_argument("--db", default=None, metavar="DSN",
+                        help="read the facts from a live PostgreSQL catalog, read-only. "
+                             "With --ddl, the indexes that script creates are added on "
+                             "top, so a pack can ask about the state after the migration")
     parser.add_argument("--facts", action="store_true",
                         help="list the registered fact models and targets, and stop")
     parser.add_argument("--verify", action="store_true",
@@ -188,10 +252,14 @@ def main(argv=None) -> int:
         return show_inference(result, Path(args.infer),
                               Path(args.write) if args.write else None)
 
-    paths = [Path(p) for p in (args.rules or [str(DEFAULT_RULE_DIR / "table-hygiene.json")])]
-    if not args.ddl and not args.verify:
+    paths = [Path(p) for p in args.rules] if args.rules else _default_packs(bool(args.db))
+    if not paths:
+        print(f"no pack in `{DEFAULT_RULE_DIR.name}/` declares the catalog model, which is "
+              f"what `--db` supplies — nothing to apply")
+        return 2
+    if not args.ddl and not args.verify and not args.db:
         parser.print_help()
-        print("\nnothing to do: pass --ddl, --verify or --vocabulary")
+        print("\nnothing to do: pass --ddl, --db, --verify or --vocabulary")
         return 2
 
     print("schemafence review — a rule pack, and a script somebody else wrote")
@@ -222,24 +290,53 @@ def main(argv=None) -> int:
               f"{'all passed' if not failed else 'FAILURES: ' + ', '.join(failed)}")
         return 0 if not failed else 2
 
+    packs = [pack for _path, pack, _rows in loaded]
+    text = ""
     if args.ddl == "-":
         text = sys.stdin.read()
-        source = "standard input"
-    else:
+    elif args.ddl:
         source_path = Path(args.ddl)
         if not source_path.exists():
             print(f"\nscript not found: {source_path}")
             return 2
         text = source_path.read_text(encoding="utf-8")
-        source = source_path.name
 
-    print(f"script : {source}")
-    report = review_ddl([pack for _path, pack, _rows in loaded], text)
+    from .rulepack import review_schema
 
-    if report.unread:
+    if args.db:
+        schema, why_not = read_catalog(args.db)
+        if schema is None:
+            print(f"\n{why_not}")
+            print("  nothing was read and no rule was applied.  Reading a catalog is a "
+                  "read: it does not need the write path, and it does not touch one.")
+            return 2
+        print(f"facts  : the live catalog — {len(schema.tables)} table(s), "
+              f"{sum(len(t.indexes) for t in schema.tables)} index(es), read-only")
+        if text.strip():
+            from .ddl import parse_ddl
+            from .snapshot import apply_script
+            applied = apply_script(schema, parse_ddl(text))
+            print(f"script : {args.ddl} → {applied.indexes} index(es) it creates were "
+                  f"added to those facts")
+            if applied.new_tables:
+                print(f"         {len(applied.new_tables)} table(s) it creates are not in "
+                      f"the catalog, so their indexes were compared with nothing: "
+                      + ", ".join(applied.new_tables))
+        elif args.ddl:
+            print("script : standard input → no statements were read from it")
+        report = review_schema(packs, schema)
+    else:
+        print(f"script : {source_path.name if args.ddl else '—'}")
+        report = review_ddl(packs, text)
+
+    if report.unread and report.origin != "catalog":
         print(f"unread : {len(report.unread)} statement(s) no reader claimed")
-    print(f"read   : {report.statements} statement(s) → {report.tables} table(s), "
-          f"{report.columns} column(s), {report.changes} change action(s)")
+    if report.origin == "catalog":
+        print(f"read   : {report.tables} table(s), {report.columns} column(s), "
+              f"{report.indexes} index(es)")
+    else:
+        print(f"read   : {report.statements} statement(s) → {report.tables} table(s), "
+              f"{report.columns} column(s), {report.changes} change action(s)")
 
     show_applied(report)
     show_findings(report)
@@ -250,6 +347,12 @@ def main(argv=None) -> int:
             print(f"  · {note}")
 
     heading("[verdict]")
+    if report.unapplied:
+        print(f"  could not review with {len(report.unapplied)} pack(s) not applied: "
+              + ", ".join(f"`{name}`" for name in report.unapplied))
+        print("  a pack that was not applied has not cleared anything. Each note above")
+        print("  names the facts it asked for, and the command that would supply them.")
+        return 2
     if report.blind:
         print("  could not review — nothing in this file was understood.")
         print("  this is not a pass, and the exit code is 2 for that reason.")
