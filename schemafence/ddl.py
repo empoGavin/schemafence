@@ -131,10 +131,13 @@ class Table:
 
 
 CHANGE_KINDS = (
-    "create_table", "add_column", "drop_column", "alter_column", "add_constraint",
-    "drop_constraint", "create_index", "drop_index", "drop_table", "rename",
-    "comment", "dml", "grant", "session", "other_ddl",
+    "create_table", "add_column", "drop_column", "alter_column", "alter_table",
+    "add_constraint", "drop_constraint", "create_index", "drop_index", "drop_table",
+    "rename", "comment", "dml", "grant", "session", "other_ddl",
 )
+# `alter_table` fell outside this tuple for one commit: the reader produced it
+# and a rule written against it was refused by the vocabulary, so the rule could
+# never fire.  `_check_kinds` below is what stops that happening quietly again.
 
 
 @dataclass
@@ -275,6 +278,25 @@ def _matching_paren(text: str, open_idx: int) -> int:
             if depth == 0:
                 return i
     raise ValueError("unbalanced parentheses in CREATE TABLE")
+
+
+def _key_columns(text: str) -> list[str]:
+    """The column list inside the first parenthesis, lowercased.
+
+    One reader for the four places a key is written — the column's own line,
+    the table body, a named table constraint, and an ``ALTER TABLE`` — because
+    four readers is how they drift apart.  A rule asks whether a table has a
+    primary key, never how it was written.
+    """
+    open_idx = text.find("(")
+    if open_idx == -1:
+        return []
+    try:
+        close = _matching_paren(text, open_idx)
+    except ValueError:
+        return []
+    return [p.strip().strip('"').lower()
+            for p in text[open_idx + 1: close].split(",") if p.strip()]
 
 
 def _split_items(body: str) -> list[str]:
@@ -488,16 +510,24 @@ def _read_create_table(schema: Schema, statement: str, position: int) -> None:
 
     for item in _split_items(body):
         if _TABLE_CONSTRAINT.match(item):
-            if re.match(r"^PRIMARY\s+KEY", item, re.IGNORECASE):
-                inner = item[item.find("(") + 1: item.rfind(")")]
-                table.primary_key.extend(
-                    p.strip().strip('"') for p in inner.split(",") if p.strip()
-                )
-            elif re.match(r"^UNIQUE\b", item, re.IGNORECASE):
-                inner = item[item.find("(") + 1: item.rfind(")")] if "(" in item else ""
-                cols = [p.strip().strip('"') for p in inner.split(",") if p.strip()]
+            # `CONSTRAINT pk_orders PRIMARY KEY (id)` is the same key as
+            # `PRIMARY KEY (id)`.  Reading the name first is the whole
+            # difference, and missing it made an unnamed constraint the only
+            # spelling that counted.
+            constraint = re.sub(r"^CONSTRAINT\s+[\w$]+\s+", "", item, flags=re.IGNORECASE)
+            if re.match(r"^PRIMARY\s+KEY", constraint, re.IGNORECASE):
+                table.primary_key.extend(_key_columns(constraint))
+            elif re.match(r"^UNIQUE\b", constraint, re.IGNORECASE):
+                cols = _key_columns(constraint)
                 if cols:
                     table.unique_keys.append(cols)
+            elif re.match(r"^FOREIGN\s+KEY\b", constraint, re.IGNORECASE):
+                ref = _REFERENCE.search(constraint)
+                if ref:
+                    for name in _key_columns(constraint):
+                        col = table.column(name)
+                        if col is not None:
+                            col.references = ref.group(1)
             continue
         col = _parse_column(item)
         if col:
@@ -506,6 +536,12 @@ def _read_create_table(schema: Schema, statement: str, position: int) -> None:
     for col in table.columns:
         if col.primary and col.name not in table.primary_key:
             table.primary_key.append(col.name)
+        # One concept, one place.  A column-level UNIQUE and a table-level
+        # UNIQUE are the same constraint written differently, so both land in
+        # unique_keys and nothing downstream has to ask twice.
+        if col.unique and not any(name in [k.lower() for k in keys]
+                                  for name in [col.name.lower()] for keys in table.unique_keys):
+            table.unique_keys.append([col.name])
 
     for pk in table.primary_key:
         col = table.column(pk)
@@ -534,11 +570,7 @@ def _read_alter(schema: Schema, target: str, body: str, statement: str,
         m = _ADD_CONSTRAINT.match(action)
         if m:
             kind, inner = m.group(1).upper(), m.group(2)
-            columns: list[str] = []
-            if "(" in inner:
-                columns = [p.strip().strip('"').lower()
-                           for p in inner[inner.find("(") + 1: inner.rfind(")")].split(",")
-                           if p.strip()]
+            columns = _key_columns(inner)
             if kind == "PRIMARY KEY" and columns:
                 for name in columns:
                     if name not in table.primary_key:
@@ -546,9 +578,17 @@ def _read_alter(schema: Schema, target: str, body: str, statement: str,
                     col = _find_column(table, name)
                     if col:
                         col.nullable = False
-                table.unique_keys.append(columns)
+                # a primary key is already unique; counting it twice would
+                # inflate unique_key_count and make the fact mean two things
             elif kind == "UNIQUE" and columns:
                 table.unique_keys.append(columns)
+            elif kind == "FOREIGN KEY" and columns:
+                ref = _REFERENCE.search(inner)
+                if ref:
+                    for name in columns:
+                        col = _find_column(table, name)
+                        if col is not None:
+                            col.references = ref.group(1)
             schema.changes.append(Change(
                 kind="add_constraint", table=qualified,
                 column=columns[0] if len(columns) == 1 else None,
@@ -743,7 +783,23 @@ def parse_ddl(raw: str) -> Schema:
                                   "no reader here claims this statement"))
 
     _apply_comments(schema, table_comments, column_comments)
+    _check_kinds(schema)
     return schema
+
+
+def _check_kinds(schema: Schema) -> None:
+    """Report any change kind the vocabulary does not declare.
+
+    A kind that is produced but not declared is the worst of both: a rule
+    written against it is refused at load, so the rule never fires, and the
+    report says nothing.  This is the one place that can see both sides.
+    """
+    for change in schema.changes:
+        if change.kind not in CHANGE_KINDS:
+            schema.unread.append((
+                change.position, change.kind,
+                f"change kind `{change.kind}` is not in CHANGE_KINDS, so no rule "
+                f"can name it — the reader and the vocabulary disagree"))
 
 
 def parse_file(path) -> Schema:
