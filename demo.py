@@ -161,6 +161,9 @@ def show_live(dsn: str, schema) -> None:
         live = snapshot.read_schema(conn)
         print(f"  tables read from the catalogue : {len(live.tables)}")
         print(f"  columns                        : {live.column_count}")
+        print(f"  indexes                        : "
+              f"{sum(len(t.indexes) for t in live.tables)} "
+              f"(read from pg_index, for rules that need them)")
 
         estimates = snapshot.row_estimates(conn)
         print()
