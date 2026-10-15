@@ -2,20 +2,19 @@
 
 [![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
 
-> Four things a DBA has on their desk: tonight's migration script, a query somebody says is
-> returning the wrong number, a question you would otherwise go to the runbook for, and the live
-> instance itself, which you have to look at rather than be told about.
+> Four things a DBA has on their desk: a script to review, a query somebody says is returning the
+> wrong number, a question you would otherwise go to the runbook for, and a live instance to
+> diagnose.
 >
-> Hand it the script and it lists what the script will do before you run it: a table dropped, a
+> Hand it the script and it lists the problems in it before anybody runs it: a table dropped, a
 > column added `NOT NULL` with no default, an index the table already carries under another name.
 > Hand it the query and it lists what the query will get wrong while the database reports no error
 > at all: a measure summed after a one-to-many join, a `LEFT JOIN` cancelled by a `WHERE`, a join
 > key that is nullable. Ask the question and it answers from the runbook, quoting the note it read.
-> Connect it to the database and it reads what is there right now: the tables, and the indexes
-> those tables already carry. An index the script is about to add and an index the catalog already
-> has land as the same fact, which is how one rule tells you the table has it already.
+> Point it at a live instance and it reads what is there now: which tables, and which indexes those
+> tables already carry. An index the script is about to add and an index the catalog already has
+> are the same fact, so it can tell you the table already carries it.
 >
-> Facts come from the file in front of you and from that read-only look at the running database.
 > Every statement the agent runs passes one fence first, that fence is read-only, and no model
 > decides whether a statement may run.
 >
@@ -24,18 +23,17 @@
 > Either way the rule is applied with no model in the loop, and it has to pass its own examples
 > first.
 >
-> 就是 DBA 手上的四件事：今晚要跑的变更脚本、一条被人说「数字不对」的查询、一个原本要去翻运维
-> 手册的问题，还有一套只能连上去看的活库——它现在是什么样，手上没有哪份脚本写得出来。
+> 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
+> 的问题、诊断一套活库。
 >
-> 把脚本丢进去，它先列出这脚本会干什么，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有默认
-> 值的列、表上其实早就有个同列同序的索引，只是名字不同。把查询丢进去，它列出这条语句会错在哪，而
-> 数据库一句错都不报：一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消、连接键本身
-> 可空。问题问它，它从你自己的运维手册里找答案，并把出处原文贴出来。
-> 把它连到库上，它读出库里现在的样子：有哪些表，表上已经挂着哪些索引。脚本马上要加的索引，和库里
-> 早就有的一条索引，落成同一个事实——所以同一条规则能反过来告诉你「这张表上已经有了」。
+> 把脚本丢进去，它先列出这脚本会有什么问题，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有
+> 默认值的列、表上其实早就有个同列同序的索引，只是名字不同。把查询丢进去，它列出这条语句会错在哪，
+> 而数据库一句错都不报：一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消、连接键
+> 本身可空。问题问它，它从你自己的运维手册里找答案，并把出处原文贴出来。
+> 连上活库，它先读出库里现在有什么：哪些表，表上已经挂着哪些索引——脚本马上要加的索引和库里早就
+> 有的索引是同一种事实，所以它反过来会告诉你「这张表上已经有了」。
 >
-> 事实来自你递过来的文件，也来自那次只读的活库查看。助手执行的每条语句先过同一道闸门，闸门只放
-> 只读语句，「能不能跑」从不由模型说了算。
+> 助手执行的每条语句先过同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
 >
 > 审核规则是文件不是代码，而且能由一句描述生成：把导出的词表交给模型，或者把描述和两个例子
 > 交给 `--infer`。两种方式产出的规则应用时都不需要模型，且必须先过自己的用例门禁。
@@ -59,9 +57,9 @@ Two gates sit in that half, and they do not share an input set. **The reviewer**
 deployed, either a schema or a statement plus a schema, and only reports. It can read a
 script that contains writes, because it runs nothing. **The fence** (`guard.py`) reads what is
 about to execute and decides; it only ever sees read-only statements, and it blocks DDL
-outright. So a change script never reaches `guard()`: a person reads the report and decides.
-The upstream is not only a model, either. A migration tool and a person write the same
-scripts, and the reviewer is the only entrance they pass through.
+outright. So a script that changes the schema never reaches `guard()`: a person reads the report
+and decides. A person, a migration tool and a model all write these scripts, and the reviewer
+does not care which of them it is.
 
 The two halves meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
 the answer text and no further, and `guard()` alone decides whether a statement runs — so
@@ -91,9 +89,7 @@ mode   : offline (no database, no model, no API key)
 ```
 
 Each finding prints a why and a fix; four selftest blocks close the run — 13 guard, 10 router,
-7 tools, 12 sql-checks, each ending `N cases → all passed`. The `[tools]` one catches a bug the
-other tests cannot see: the relevance floor asked whether an embedder was attached, and
-`open_store` attaches one even offline, so the floor of 0.45 dropped every lexical hit (0.089–0.285).
+7 tools, 12 sql-checks, each ending `N cases → all passed`.
 
 To review a script somebody else wrote, with the rules in the repo and nothing else installed:
 
@@ -116,10 +112,9 @@ python agent_cli.py --eval --report eval/report-dba.md # hit rate + tuning grid
 **Four tools** — `search_docs`, `run_sql`, `explain_sql`, `get_table_stats` — all through
 one door, `guard()`, and every call appended to `agent_trace.jsonl` with its decision, its
 layer and its duration. The loop is hand-written rather than delegated to a framework, so
-tool selection and failure handling stay explainable line by line. Two bugs were only found
-by running it live: a tool that failed identically every round until the budget was gone
-(calls are now memoised, with a breaker that forces a plain-text answer), and a model
-endpoint that went quiet (retry with backoff, 4xx not retried, and a degradation path).
+tool selection and failure handling stay explainable line by line: a tool that fails is not
+called again, a spent failure budget ends the round with a plain-text answer instead of an
+empty one, and a model endpoint that goes quiet is retried with backoff while a 4xx is not.
 
 **A keyword is not intent.** `删除` appears in `帮我删掉 orders 这张表`, which has to be
 refused, and in `怎么安全地删除大表的历史分区？`, which has to be answered. The router
@@ -445,8 +440,10 @@ model with least, which is why it is written as fixed rules.
 Issues and PRs welcome — especially **real-world examples of plausible-but-wrong SQL**
 (sanitized, please). They become test cases; use the [issue template](.github/ISSUE_TEMPLATE/wrong-sql.md).
 
-Write the way the opening reads: name the script, the query or the symptom first, and introduce
-the layer only after the reader has recognised the work.
+Write the way the opening reads: name the script, the query, the symptom or the instance first,
+and introduce the layer only after the reader has recognised the work. Use the verb for the work
+(review a script, diagnose an instance) rather than a noun phrase, and say what something does
+rather than why it was built that way.
 
 ## License
 

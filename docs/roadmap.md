@@ -1,10 +1,9 @@
 # Roadmap
 
-What is built, what is next, and in what order. Read it as the DBA work it lets
-somebody hand over: a change script read before the window opens, a query read
-for the number it will get wrong, a question answered from the runbook. The two
-sections at the end say what this project deliberately will not do, because that
-is the part that keeps it from turning into a general-purpose SQL linter.
+What is built, what is next, and in what order. Read it as the DBA work it takes over: a script
+reviewed, a query checked for the number it gets wrong, a question answered from the runbook, a
+live instance read. The two sections at the end say what this project deliberately will not do,
+because that is the part that keeps it from turning into a general-purpose SQL linter.
 
 ## The gap this roadmap fills
 

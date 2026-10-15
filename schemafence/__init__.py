@@ -1,11 +1,9 @@
-"""schemafence — a change script, a query, a live database, a runbook, read from one place.
+"""schemafence — a script, a query, a live instance, a runbook.
 
-A DBA has four things on their desk: tonight's migration script, read before the window opens
-for what it will do to the table; a query somebody says is returning the wrong number, read for
-the mistake the database will not report; a live instance you have to look at, because no script
-says what is already in there; and a question you would otherwise open the runbook for.  The
-script and the query are pure functions here, the question is answered with the note quoted
-back, and the live read is how a rule finds out what the tables already carry.
+A DBA has four things on their desk: a script to review, a query somebody says is returning the
+wrong number, a question you would otherwise go to the runbook for, and a live instance to
+diagnose.  The script and the query are pure functions here, the question is answered with the
+note quoted back, and the live read is how a rule finds out what the tables already carry.
 
 It never calls a language model, and that is deliberate: give it the same script twice and you
 get the same report twice, whatever model is in the room, or with none.  The agent is the half
