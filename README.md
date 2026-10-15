@@ -377,10 +377,13 @@ schema, and S2/S4/S5/S6.
 - **Both readers are hand-written, and both stop where they stop.** The DDL reader assumes
   one column definition per line, reads a closed set of statement kinds, and copies a
   dollar-quoted body whole without parsing it: every statement it does not claim is listed by
-  position, and a file where it claims nothing exits 2 rather than reporting zero findings. The
-  SQL-side checks read a single query level and abstain, with a note, on anything nested,
-  unparsable or ambiguous. Production should parse with `sqlglot` or `pg_query`; it is
-  dependency-free on purpose, so `python demo.py` runs on a fresh clone with no install.
+  position, and a file where it claims nothing exits 2 from the review command rather than
+  reporting zero findings. The schema audit is the exception and it is R10 in
+  [`docs/roadmap.md`](docs/roadmap.md): `python demo.py --source` prints `0 finding(s)` over the
+  same file, which is the same failure one command over. The SQL-side checks read a single
+  query level and abstain, with a note, on anything nested, unparsable or ambiguous. Production
+  should parse with `sqlglot` or `pg_query`; it is dependency-free on purpose, so
+  `python demo.py` runs on a fresh clone with no install.
 - **The offline embedding is lexical, not semantic**, and its scores are not comparable
   with an API model's (0.089–0.285 against 0.5–0.7). 97.7% over 40 chunks proves the
   plumbing works, not that retrieval is good.

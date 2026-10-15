@@ -131,6 +131,7 @@ them executes, so none of them changes what this project is.
 | **R7** | the fence's rule set is configurable | `guard.py` | The seven layers are code. |
 | **R8** | a rule over the statement, not only over the schema | a SQL fact model | `checks_sql.py` has the facts it needs (the FROM chain, join keys, uniqueness) but does not expose them as rows, so every rule written so far reads DDL. |
 | **R9** | a rule that needs what the database already holds | a `catalog` fact model, `pg_index` | **done** — `rules/index-hygiene.json` refuses a script and asks for `--db`; the row shape is held identical to the script reader's by `tests/qa_probe.py` M1. The query itself has not been run against a server yet. |
+| **R10** | the schema audit says when it read nothing, not only the reviewer | `demo.py`, `checks.py` | not done — checks 1 to H are functions of a schema, so a file with no tables in it yields `0 finding(s)` and exit 0 with nothing said. A script holding only `\copy … from 'x.csv'` and `VACUUM FULL;` reproduces it, and the same file through `python -m schemafence.review` exits 2. |
 
 R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
 live connection is not a write connection, which is why the `--db` axis has
@@ -142,6 +143,11 @@ than no review, because zero findings reads as a pass. The discipline already
 holds on both sides of it. `checks_sql.py` abstains with a note instead of
 guessing, and `tests/qa_probe.py` turns a raising selftest into a FAIL line
 rather than letting the crash swallow the summary.
+
+It holds in the reviewer, and it does not hold in the schema audit yet, which is
+R10. Checks 1 to H are functions of a schema; a script with no tables in it is a
+file they have nothing to say about, and "nothing to say about it" has to be a
+different sentence from "clean".
 
 ## A rule set has to be a file
 
