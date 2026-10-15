@@ -201,7 +201,7 @@ def main(argv=None) -> int:
                         help="exit non-zero if a finding at this level or above exists")
     args = parser.parse_args(argv)
 
-    print("schemafence — the DBA agent, and the fence in front of the database")
+    print("schemafence — a read-only DBA agent, a reviewer, and a fence")
     rule("=")
 
     source = Path(args.source)

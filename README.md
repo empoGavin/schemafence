@@ -2,25 +2,36 @@
 
 [![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
 
-> An agent that answers database questions from a DBA knowledge base and diagnoses issues on a live instance, and a fence that every statement must pass through before it reaches the database.
+> A read-only database agent plus the deterministic layer in front of it. It answers from a DBA
+> knowledge base, reads a live instance for facts, reviews a schema and a statement for the errors
+> that raise nothing, and every statement passes through a fence before it runs.
 >
-> 三层：先查知识库，再看活库的真实样子（不是别人描述的样子），最后才决定这条语句放不放行。
+> 一个只读的数据库助手，加上它前面那层确定性的东西：答问靠知识库，事实靠活库，
+> 找「不报错却算错」的地方靠静态审核，放不放行只由一道闸门决定。
 
 ## Two halves, and one rule about how they meet
 
 Most database AI tools ship one of these and let it stand in for the other: a diagnostic
 answer and a write-capable connection in the same process with nothing in between.
 
-|                | **The agent** (knowledge side)                      | **The fence** (constraint side)                          |
+|                | **The agent** (knowledge side)                      | **The deterministic half**                               |
 | -------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| Answers        | "orders 表为什么这么慢？" · "idle in transaction 有什么后果？" | "这条语句允许执行吗？"                                             |
+| Answers        | "orders 表为什么这么慢？" · "idle in transaction 有什么后果？" | **the reviewer** "数字对不对？" · **the fence** "允许执行吗？"     |
 | Decides by     | retrieval, tool evidence, optionally a model        | fixed rules, no model and no retrieval                   |
 | Nature         | probabilistic: a wrong answer is bad advice          | deterministic: a wrong decision damages data silently    |
 | Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | not possible, by design                                  |
 | Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 12 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
-| Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `schemafence/guard.py`                                   |
+| Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `checks.py` + `checks_sql.py` (reports) · `guard.py` (decides) |
 
-They meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
+Two gates sit in that half, and they do not share an input set. **The reviewer**
+(`checks.py`, `checks_sql.py`) reads what is about to be deployed, either a schema or a statement
+plus a schema, and only reports. It can read a script that contains writes, because it runs
+nothing. **The fence** (`guard.py`) reads what is about to execute and decides; it only ever sees
+read-only statements, and it blocks DDL outright. So a change script never reaches `guard()`: a
+person reads the report and decides. The upstream is not only a model, either. A migration tool
+and a person write the same scripts, and the reviewer is the only entrance they pass through.
+
+The two halves meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
 the answer text and no further, and `guard()` alone decides whether a statement runs — so
 a mediocre retrieval score is a quality problem, not a safety one.
 
@@ -32,16 +43,19 @@ python demo.py          # no database, no model, no API key, about 30 seconds
 ```
 
 ```
-schemafence — the DBA agent, and the fence in front of the database
+schemafence — a read-only DBA agent, a reviewer, and a fence
 ====================================================================
-source : sample_schema.sql      tables : 7      columns : 33
+source : sample_schema.sql
+tables : 7      columns : 33
+mode   : offline (no database, no model, no API key)
 
 [check 1] schema resolution — which entity gets picked   (1)
 [check 2] join-key sanity — rows silently dropped   (4)
 [check 3] type & precision — values silently changed   (6)
 [check 4] NULL semantics — three-valued logic traps   (1)
 [check H] hygiene — comments and naming   (4)
-[summary]  16 finding(s): 5 high / 9 medium / 2 low
+[summary]
+  16 finding(s): 5 high / 9 medium / 2 low
 ```
 
 Each finding prints a why and a fix; four selftest blocks close the run — 13 guard, 10 router,
@@ -99,7 +113,7 @@ cannot leave a company are in [`docs/synthetic-corpus.md`](docs/synthetic-corpus
 is a measuring stick, not a gate: 44 questions over 40 chunks come out at **97.7% top-5**
 offline, with the relevance floor named rather than guessed.
 
-## Half two — the fence
+## Half two — the reviewer and the fence
 
 ### Why it exists
 
@@ -123,8 +137,10 @@ The query runs and returns a plausible number — nothing raises an error, the r
 | 6   | **Runtime guardrails**            | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 
 Checks 1–4, S and the guardrails run with or without a database. Check 5 needs a live
-connection and is partly wired up. Check 7, the migration diff, is not built yet. It is the
-reason the project exists, and a different story from this one.
+connection and is partly wired up. The reviewer reads a schema today, so a migration script
+parses as an empty schema and is reported clean with a zero exit code: the failure this project
+exists to catch, happening to it. That gap and the migration diff are both in
+[`docs/roadmap.md`](docs/roadmap.md).
 
 Check S is the one worth explaining. `checks.py` reads the schema and never sees a statement;
 `guard.py` reads the statement and never sees a schema. A fan-out and a cancelled `LEFT JOIN`
@@ -134,9 +150,7 @@ runs — its rules, its abstentions and the tiers above it are in
 [`docs/roadmap.md`](docs/roadmap.md). As a library:
 
 ```python
-from schemafence import parse_ddl
-from schemafence.checks_sql import check_sql
-from schemafence.guard import guard
+from schemafence import check_sql, guard, parse_ddl
 schema = parse_ddl(open("examples/sample_schema.sql").read())
 sql = "SELECT SUM(o.amount) FROM shop.orders o JOIN shop.refunds r ON o.id = r.order_id"
 print([f.subject for f in check_sql(schema, sql).findings])   # ['SUM(o.amount)  x  shop.refunds']
@@ -158,14 +172,15 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 ## Status
 
 **Early. The offline path runs end to end; live mode is partly wired up.** Done: checks 1–4 and
-hygiene, the seven-layer guardrail and its selftests, live catalogue and `pg_stats` reads, the
-knowledge layer on JSON or pgvector, the eval harness, and 97 offline QA cases. Not done: the
-migration diff.
+hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
+catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, and 97
+offline QA cases. Not done: reviewing a change script by its actions, and the migration diff.
 
 ## Known limitations
 
 - **Both readers are hand-written, and both stop where they stop.** The DDL reader assumes
-  one column definition per line; the SQL-side checks read a single query level and abstain,
+  one column definition per line, and reads `CREATE TABLE` only, so a migration script parses as
+  empty and reviews clean; the SQL-side checks read a single query level and abstain,
   with a note, on anything nested, unparsable or ambiguous. Production should parse with
   `sqlglot` or `pg_query`; it is dependency-free on purpose, so `python demo.py` runs on a
   fresh clone with no install.

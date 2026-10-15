@@ -1,12 +1,13 @@
-"""schemafence — a constraint layer between LLMs and databases.
+"""schemafence — a read-only database agent, and the deterministic layer in front of it.
 
-Nothing in this package calls a language model.  That is deliberate:
-every check here is deterministic, so it behaves identically with any
-model, or with no model at all.
+The deterministic layer never calls a language model, and that is deliberate:
+every check and the guardrail are pure functions, so they behave identically with
+any model, or with no model at all.  The agent is the half allowed to be wrong.
 
 Public surface:
     parse_ddl(text)  -> Schema          (read a schema definition)
-    analyze(schema)  -> list[Finding]   (the checks)
+    analyze(schema)  -> list[Finding]   (the schema checks)
+    check_sql(schema, sql) -> SqlReview (the statement checks: reports, never decides)
     guard(sql)       -> GuardResult     (the seven-layer guardrail)
     Embedder         -> text -> vector  (offline hash, or any OpenAI-compatible API)
     JsonStore/PgStore                   (the knowledge layer, two backends)
@@ -15,6 +16,7 @@ Public surface:
 """
 
 from .checks import Finding, analyze, summarize
+from .checks_sql import SqlReview, check_sql, run_sql_selftest  # noqa: F401
 from .ddl import Column, Schema, Table, parse_ddl
 from .guard import GuardResult, guard, run_selftest
 from .knowledge import (Chunk, Embedder, Hit, JsonStore, PgStore,  # noqa: F401
@@ -30,6 +32,9 @@ __all__ = [
     "Finding",
     "analyze",
     "summarize",
+    "SqlReview",
+    "check_sql",
+    "run_sql_selftest",
     "GuardResult",
     "guard",
     "run_selftest",
