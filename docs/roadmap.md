@@ -116,30 +116,39 @@ test a definition when it changes.
 
 ## Requested, and where each one lands
 
-Five things asked for that the tables above do not yet cover. Each one reads
-and reports. None of them executes, so none of them changes what this project
-is.
+Five things were asked for that the tables above do not yet cover, and two more
+came out of reviewing the code against them. Each one reads and reports. None of
+them executes, so none of them changes what this project is.
 
 | # | Asked for | Lands in | Missing today |
 | --- | --- | --- | --- |
 | **R1** | a table with no primary key is a finding | `checks.py` | `ddl.py` records inline and table-level `PRIMARY KEY` already, for S1. The rule itself is not written. |
 | **R2** | one concept, one standard: naming, type, unit, enum | `checks.py`, then tier 4 | Today only check H (`Inconsistent naming for the same concept`, missing comments) and check 1 (near-duplicate names). |
 | **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Tier 2 is its finished form. |
-| **R4** | the change-review rule set is configurable | new, see the next section | All seven layers are code. |
+| **R4** | a review rule is a description and its examples, not code | `checks.py`, and the rule file below | Every review rule is a Python function. `ddl.py` already carries the facts three of them need. |
 | **R5** | the B-class errors, not only the A class | `checks_sql.py`, then tier 3 | S2, S4, S5, S6, and the counterexample tier. |
+| **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, `checks.py` | `ddl.py` reads `CREATE TABLE` and nothing else, so an `ALTER` script parses as zero tables, reports zero findings and exits zero. |
+| **R7** | the fence's rule set is configurable | `guard.py`, and the file below | The seven layers are code. |
 
 R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
 live connection is not a write connection, which is why the `--db` axis has
 always been independent of the key axes.
 
+R6 carries a requirement that outranks the feature: **when the reader recognises
+nothing, it has to say so.** A review that silently returns nothing is worse
+than no review, because zero findings reads as a pass. The discipline already
+holds on both sides of it. `checks_sql.py` abstains with a note instead of
+guessing, and `tests/qa_probe.py` turns a raising selftest into a FAIL line
+rather than letting the crash swallow the summary.
+
 ## A rule set has to be a file
 
-R4 is the one request with a constraint attached, because `guard.py` being
-deterministic is the whole point of that half.
+R4 and R7 are the two requests with a constraint attached, because being
+deterministic is the whole point of that half of the project. They need
+different answers, and they share one rule: **what is configurable is an
+artefact that is committed**, not a value that is looked up.
 
-**The rule set is an artefact that happens to be configurable.** It lives in a
-file, it is committed, and every load writes the ruleset it applied into the
-audit record. That is what makes "who changed the fence" answerable.
+### R7 — the fence's rule set
 
 | | |
 | --- | --- |
@@ -147,8 +156,57 @@ audit record. That is what makes "who changed the fence" answerable.
 | Configured with care | switches for the seven layers themselves. Turning off L3 is the same as allowing a write inside a CTE. |
 | Never configured | the decision logic |
 
+Every load writes the rule set it applied into the audit record. That is what
+makes "who changed the fence" answerable.
+
 The rule set may not be fetched from a database or a service. A fence that
 depends on a row somebody can update is not a fence.
+
+### R4 — the review rule set
+
+A review rule is a description plus the examples that prove it, in one file. The
+rule is a declaration over the parsed schema, not Python:
+
+```yaml
+id: column-comment-cites-standard
+severity: medium
+scope: column
+assert:
+  comment_matches: "(?i)标准\\s*[:：]\\s*[A-Z]{2,}-\\d+"
+message: A column comment has to name the data standard it implements.
+fix: Add 标准：<ID> to the column comment.
+examples:
+  - silent: 'COMMENT ON COLUMN shop.orders.paid_at IS ''支付时间 标准：TS-004'''
+  - fires:  'COMMENT ON COLUMN shop.orders.paid_at IS ''支付时间'''
+```
+
+The examples are not a prompt for a model. They are the acceptance test: a rule
+that cannot reproduce every label in its own file does not get committed, and
+the labels are the same bar the checks above are held to, one case that fires
+and one near miss that stays silent. That bar is why configurable does not decay
+into approximate.
+
+The vocabulary stays closed on purpose: a selector over tables, columns or
+constraints, and assertions of presence, type, nullability, pattern, enumeration
+and reference. No loops, no user-defined functions, no code in the file. A rule
+set that can express anything cannot be reviewed by a person, and a rule set
+nobody can read is not evidence.
+
+Authoring may use a model. Execution never does: the model runs while the rule is
+being written, its proposal is shown as a diff, and the review path calls only
+the deterministic evaluator. This is the separation the two halves already rest
+on, one level up, because a rule is where a probabilistic step gets frozen into a
+deterministic one.
+
+The facts have to exist before the rules over them do, and most of them already
+do. `ddl.py` records primary keys, `UNIQUE` constraints, table comments and
+column comments, which is why R1 and R2 are nearer than they look: what is
+missing is the rule, not the reader. Change actions are the exception, which is
+why R6 comes first.
+
+The five checks that already exist stay Python. The rule file layer is for what
+gets added, starting with R1 and R2; moving the old ones across is mechanical and
+can wait until the vocabulary stops moving.
 
 ## Prior art
 
