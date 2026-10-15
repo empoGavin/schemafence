@@ -2,34 +2,40 @@
 
 [![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
 
-> Three things a DBA has on their desk: tonight's migration script, a query somebody says is
-> returning the wrong number, and a question you would otherwise go to the runbook for.
+> Four things a DBA has on their desk: tonight's migration script, a query somebody says is
+> returning the wrong number, a question you would otherwise go to the runbook for, and the live
+> instance itself, which you have to look at rather than be told about.
 >
 > Hand it the script and it lists what the script will do before you run it: a table dropped, a
 > column added `NOT NULL` with no default, an index the table already carries under another name.
 > Hand it the query and it lists what the query will get wrong while the database reports no error
 > at all: a measure summed after a one-to-many join, a `LEFT JOIN` cancelled by a `WHERE`, a join
 > key that is nullable. Ask the question and it answers from the runbook, quoting the note it read.
+> Connect it to the database and it reads what is there right now: the tables, and the indexes
+> those tables already carry. An index the script is about to add and an index the catalog already
+> has land as the same fact, which is how one rule tells you the table has it already.
 >
-> Facts come from the script, and from a read-only look at the live instance for the half a script
-> cannot state by itself. Every statement the agent runs passes one fence first, that fence is
-> read-only, and no model decides whether a statement may run.
+> Facts come from the file in front of you and from that read-only look at the running database.
+> Every statement the agent runs passes one fence first, that fence is read-only, and no model
+> decides whether a statement may run.
 >
 > Its review rules are files rather than code, and a file can be written from a description: the
 > exported vocabulary goes to a model, or the sentence and two example scripts go to `--infer`.
 > Either way the rule is applied with no model in the loop, and it has to pass its own examples
 > first.
 >
-> 就是 DBA 手上的三件事：今晚要跑的变更脚本、一条被人说「数字不对」的查询、一个原本要去翻运维
-> 手册的问题。
+> 就是 DBA 手上的四件事：今晚要跑的变更脚本、一条被人说「数字不对」的查询、一个原本要去翻运维
+> 手册的问题，还有一套只能连上去看的活库——它现在是什么样，手上没有哪份脚本写得出来。
 >
 > 把脚本丢进去，它先列出这脚本会干什么，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有默认
 > 值的列、表上其实早就有个同列同序的索引，只是名字不同。把查询丢进去，它列出这条语句会错在哪，而
 > 数据库一句错都不报：一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消、连接键本身
 > 可空。问题问它，它从你自己的运维手册里找答案，并把出处原文贴出来。
+> 把它连到库上，它读出库里现在的样子：有哪些表，表上已经挂着哪些索引。脚本马上要加的索引，和库里
+> 早就有的一条索引，落成同一个事实——所以同一条规则能反过来告诉你「这张表上已经有了」。
 >
-> 事实来自脚本，也来自一次只读的活库查看——补的正是脚本说不出来的那半边。助手执行的每条语句先过
-> 同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
+> 事实来自你递过来的文件，也来自那次只读的活库查看。助手执行的每条语句先过同一道闸门，闸门只放
+> 只读语句，「能不能跑」从不由模型说了算。
 >
 > 审核规则是文件不是代码，而且能由一句描述生成：把导出的词表交给模型，或者把描述和两个例子
 > 交给 `--infer`。两种方式产出的规则应用时都不需要模型，且必须先过自己的用例门禁。

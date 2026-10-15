@@ -1,13 +1,15 @@
-"""schemafence — a change script and a query, each read before it reaches the database.
+"""schemafence — a change script, a query, a live database, a runbook, read from one place.
 
-A DBA does two readings by hand: a change script, read before the window opens for what it
-will do to the table; and a query, read for the number it will get wrong while the database
-reports nothing.  Both are pure functions here, and a question is answered from a runbook with
-the note quoted back.  Behind them sits the deterministic layer.
+A DBA has four things on their desk: tonight's migration script, read before the window opens
+for what it will do to the table; a query somebody says is returning the wrong number, read for
+the mistake the database will not report; a live instance you have to look at, because no script
+says what is already in there; and a question you would otherwise open the runbook for.  The
+script and the query are pure functions here, the question is answered with the note quoted
+back, and the live read is how a rule finds out what the tables already carry.
 
-It never calls a language model, and that is deliberate: every check and the guardrail are pure
-functions, so they behave identically with any model, or with no model at all.  The agent is
-the half allowed to be wrong.
+It never calls a language model, and that is deliberate: give it the same script twice and you
+get the same report twice, whatever model is in the room, or with none.  The agent is the half
+allowed to be wrong.
 
 Public surface:
     parse_ddl(text)  -> Schema          (a script as a schema, plus its change actions)
