@@ -1224,16 +1224,41 @@ def doc_cases() -> None:
     check("N1", "every relative link in README and docs/ resolves", not dead,
           "; ".join(dead[:4]))
 
+    # The package docstring counts too: the slogan went out of the README
+    # while both the docstring and the architecture note still led with it.
+    n2_reads = docs + [ROOT / "schemafence" / "__init__.py"]
     retired = {
         "constraint layer between LLMs and databases": "the banner the project retired",
         "two halves": "a section name the restructure removed",
         "It never calls a language model": "a banner the positioning revision replaced with where the model sits",
+        "AI × DBA": "a slogan the docs no longer explain; the three parts carry the point",
+        "Every statement that runs against a live database passes one fence first":
+            "a claim wider than the gate reaches, which the README itself corrects (R13, R15)",
+        "执行到活库上的每条语句先过同一道闸门":
+            "the same claim in the Chinese half",
     }
-    stale = sorted({f"{d.relative_to(ROOT).as_posix()} — {why}"
-                    for d in docs for phrase, why in retired.items()
+    stale = sorted({f"{d.relative_to(ROOT).as_posix()} — {phrase!r}: {why}"
+                    for d in n2_reads for phrase, why in retired.items()
                     if phrase in d.read_text(encoding="utf-8")})
     check("N2", "no doc still carries wording this project retired", not stale,
           "; ".join(stale[:4]))
+
+    lead = (ROOT / "README.md").read_text(encoding="utf-8").split("**Contents**")[0]
+    first_cjk = re.search(r"[\u4e00-\u9fff]", lead)
+    en_lead, zh_lead = lead[:first_cjk.start()], lead[first_cjk.start():]
+    points = [
+        ("why the database needs a fence", "nl2sql", "nl2sql"),
+        ("why a rule can be added without a release", "plain words", "自然语言"),
+        ("what the agent is for", "inspect", "巡检"),
+    ]
+    absent = [f"{what} ({side} half)"
+              for what, en_mark, zh_mark in points
+              for side, text, mark in (("English", en_lead.lower(), en_mark),
+                                       ("Chinese", zh_lead.lower(), zh_mark))
+              if mark not in text]
+    check("N5", "the opening still says why each of the three parts exists, in both halves",
+          not absent,
+          "; ".join(absent) if absent else "fence, rules and the agent, in both halves")
 
     sample = (ROOT / "examples" / "sample_schema.sql").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")

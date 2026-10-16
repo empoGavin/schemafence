@@ -11,15 +11,13 @@
 > and one gate decides whether a statement may run at all.
 >
 > Reviewing scripts is standing work for a DBA: it arrives in volume, and what counts as a problem
-> differs from one shop to the next. So the checks have to be addable without a release, and writing
-> them is a place a model genuinely helps — say what you want checked in plain words, give two
-> examples, and it is a rule you can use. No code change, no model when the rule runs, and the rule
-> has to pass its own examples first.
+> differs from one shop to the next. So the checks have to be addable without a release — and being
+> able to add a rule by describing it in plain words is what makes that worth having.
 >
-> With that fence in place, a model can be put to work on the database itself: answer a question
-> that would otherwise send you to the runbook, read an instance on a schedule, show what it found
-> and give a conclusion. Inspection and diagnosis get deeper, get easier to use, and are done
-> against the database you actually run.
+> A DBA carries a shelf of databases and only so many hours for each of them. So give each one a
+> virtual DBA: an agent you talk to in plain words, that inspects that instance on a schedule,
+> diagnoses what it finds, and follows the habits that one instance has. The more instances you
+> carry, the more it pays off.
 >
 > Four things a DBA has on their desk: a script to review, a query somebody says is returning the
 > wrong number, a question you would otherwise go to the runbook for, and a live instance to
@@ -35,19 +33,19 @@
 > which indexes those tables already carry, and what earlier passes found — so it is the agent that
 > knows *this* instance, rather than instances in general.
 >
-> Every statement that runs against a live database passes one fence first, that fence is
-> read-only, and no model decides whether a statement may run.
+> The reads the agent makes of a live database go through one fence first: read-only statements pass,
+> DDL is refused, and no model decides whether a statement may run. What does not reach it yet is
+> named in [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not).
 >
-> 现在写语句这件事越来越多交给 NL2SQL 去做，而这些语句不管是谁写出来的，最后都落到同一个地方：
+> 现在写 SQL 语句这件事越来越多交给 NL2SQL 去做，而这些语句不管是谁写出来的，最后都落到同一个地方：
 > 数据库，整个应用都压着它的那个节点。所以数据库前面得有一道护栏：脚本也好、语句也好，先过一遍审核，
 > 再由一道闸门决定这条语句到底能不能跑。
 >
 > 审脚本是 DBA 常年要干的一份活：量大，而且每个企业对「什么算问题」的标准都不一样。所以审核规则得
-> 能随时加、加的时候不用发版 —— 说清你要审什么、再给两个例子，它就是一条能用的规则，这件事上模型是
-> 真帮得上忙的一环。规则跑起来不过模型，而且规则本身要先过自己那两个例子的门禁。
+> 能随时加、加的时候不用发版 —— 规则能用自然语言加进去，DBA 这份活就省事得多。
 >
-> 有了这道护栏，模型就能用到数据库本身上面：答一个原本要去翻运维手册的问题，按计划把活库读一遍、
-> 把读到的摆出来、再给出结论 —— 巡检和诊断因此能做得更深入、也更好用。
+> DBA 手上往往是一堆库，分给每个库的精力有限。那就给每个库配一个虚拟 DBA（AI AGENT）：你用自然语言
+> 跟它说话，让它按计划巡检、诊断这套库，盯住这套库自己的习性 —— 库越多，这件事越管用。
 >
 > 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
 > 的问题、诊断一套活库。
@@ -59,7 +57,9 @@
 > 并把出处原文贴出来。连上活库，它读出库里现在有什么，也记下上一次读到了什么：哪些表，表上已经
 > 挂着哪些索引，前几轮查出了什么 —— 所以它懂的是**这一套**库，不是「库」这个东西。
 >
-> 执行到活库上的每条语句先过同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
+> 它读到活库上的每一条语句，都先过同一道闸门：只放只读语句、DDL 一律拒，「能不能跑」从不由模型说了算。
+> 还没走到闸门上的那几处，写在下面
+> [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) 一节里。
 
 **Contents** — [Quick start](#quick-start) ·
 [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) ·
@@ -487,7 +487,7 @@ end to end; live mode is partly wired up.
 | **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the offline half of result plausibility (check 5) |
 | **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs (R12) |
 | **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes (R13), and a front door for a statement you wrote (R11) |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 133 offline QA cases, CI on Python 3.10–3.13 | the migration diff, Oracle |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 134 offline QA cases, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 A rule pack is verified against its own examples when it loads, a pack that repeats or contradicts
 itself is caught before it is applied, and a pack that needs facts from the live catalog is refused

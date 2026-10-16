@@ -1,7 +1,8 @@
 """schemafence — review a script, check a statement, diagnose a live instance, answer from the runbook.
 
-An AI × DBA project: a model writes the statements and it writes the diagnosis, and DBA judgement
-is what catches them.  A DBA has four things on their desk: a script to review, a statement
+Three parts: a script or a statement is reviewed and never run, a diagnostic agent reads an
+instance and remembers what it saw, and one fence decides what may run.  A DBA has four things on
+their desk: a script to review, a statement
 somebody says is returning the wrong number, a question you would otherwise go to the runbook for,
 and a live instance to diagnose.  The script and the statement are pure functions here, the
 question is answered with the note quoted back, and the live read is how a rule finds out what the

@@ -3,9 +3,9 @@
 Read this when you want to change something. It answers *which file do I open*, and which parts are
 deliberately not wired to each other. To run the thing instead, see [`quickstart.md`](quickstart.md).
 
-The project is an **AI × DBA** one and it has three parts: **review** (a script or a statement,
-reported on and never run), a **diagnostic agent** (reads an instance, draws a conclusion, remembers
-what it saw), and **the fence** (the one place that decides). The tables below say which file each
+The project has three parts: **review** (a script or a statement, reported on and never run), a
+**diagnostic agent** (reads an instance, draws a conclusion, remembers what it saw), and **the
+fence** (the one place that decides). The tables below say which file each
 part lives in — including the parts that are not written yet, because "where would this go" is a
 question this file exists to answer.
 
@@ -18,7 +18,7 @@ question this file exists to answer.
 | Answer a question your runbook has the answer to | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
 | Diagnose a live instance | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
 | Run everything offline, no database and no key | `python demo.py` | all of the above except the live reads |
-| The regression gate | `python tests/qa_probe.py` | 133 cases |
+| The regression gate | `python tests/qa_probe.py` | 134 cases |
 | Check a query for the number it gets wrong | **no command yet** — R11 | would be `checks_sql.py` |
 | Hand the gate a statement of your own | **no command yet** — R15 | would be `guard.py` |
 | Run a diagnosis, and keep what it found | **no command yet** — R12 | would be `snapshot.py` → `checks.py` → a store of past runs |
@@ -58,7 +58,7 @@ Front doors and harness:
 | --- | --- |
 | `demo.py` | Audits a schema and runs the selftests. Offline by default, `--db` to add the live read. |
 | `agent_cli.py` | `--ingest`, `--ask`, `--eval`, `--tune`, `--genq`, `--report`. |
-| `tests/qa_probe.py` | 133 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
+| `tests/qa_probe.py` | 134 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
 | `scripts/` | Corpus converters, the pgvector ingest, the benchmark trio and its report generator, `setup_pg.sh`, `test_layers.py`. |
 | `rules/` | Three shipped rule packs: `table-hygiene`, `change-review`, `index-hygiene`. |
 
