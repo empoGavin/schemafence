@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1122,6 +1123,126 @@ def catalogue_cases() -> None:
           f"applies_to={vocab['applies_to']}")
 
 
+# --------------------------------------------------------------------------- #
+# N. the docs — the numbers they quote, and the files they point at
+# --------------------------------------------------------------------------- #
+def _split_top(text: str) -> list[str]:
+    """Split on the commas that are not inside parentheses or quotes."""
+    parts, buf, depth, inq = [], "", 0, False
+    for ch in text:
+        if inq:
+            buf += ch
+            if ch == "'":
+                inq = False
+            continue
+        if ch == "'":
+            inq = True
+            buf += ch
+        elif ch == "(":
+            depth += 1
+            buf += ch
+        elif ch == ")":
+            depth -= 1
+            buf += ch
+        elif ch == "," and depth == 0:
+            parts.append(buf.strip())
+            buf = ""
+        else:
+            buf += ch
+    if buf.strip():
+        parts.append(buf.strip())
+    return parts
+
+
+def _value_tuples(body: str) -> list[str]:
+    """The parenthesised value groups of a VALUES clause, at depth one."""
+    out, buf, depth, inq = [], "", 0, False
+    for ch in body:
+        if inq:
+            buf += ch
+            if ch == "'":
+                inq = False
+            continue
+        if ch == "'":
+            inq = True
+        if ch == "(":
+            depth += 1
+            if depth == 1:
+                buf = ""
+                continue
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                out.append(buf)
+                continue
+        if depth >= 1:
+            buf += ch
+    return out
+
+
+def _null_fraction(sql_text: str, table: str, column: str) -> float | None:
+    """How much of one column the shipped INSERT statements leave NULL.
+
+    Just enough of a reader for ``examples/sample_schema.sql``.  The docs quote
+    these as measured output, so they have to be recomputed rather than trusted.
+    """
+    pat = re.compile(r"INSERT\s+INTO\s+" + re.escape(table)
+                     + r"\s*\(([^)]*)\)\s*VALUES\s*(.*?);", re.S | re.I)
+    m = pat.search(sql_text)
+    if not m:
+        return None
+    cols = [c.strip().lower() for c in m.group(1).split(",")]
+    if column.lower() not in cols:
+        return None
+    pos = cols.index(column.lower())
+    rows = [_split_top(t) for t in _value_tuples(m.group(2))]
+    rows = [r for r in rows if len(r) == len(cols)]
+    if not rows:
+        return None
+    nulls = sum(1 for r in rows if r[pos].strip().upper() == "NULL")
+    return nulls / len(rows)
+
+
+def doc_cases() -> None:
+    """The outward-facing docs quote numbers and point at files; both go stale in silence.
+
+    All three cases here have already gone wrong once: a link to a file a merge
+    renamed, a quoted banner from a retired product line, and a NULL fraction
+    copied forward from an older sample.
+    """
+    docs = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
+    link = re.compile(r"\]\(([^)\s]+)\)")
+    dead: list[str] = []
+    for doc in docs:
+        for target in link.findall(doc.read_text(encoding="utf-8")):
+            if target.startswith(("http://", "https://", "#", "mailto:")):
+                continue
+            if not (doc.parent / target.split("#")[0]).resolve().exists():
+                dead.append(f"{doc.relative_to(ROOT).as_posix()} → {target}")
+    check("N1", "every relative link in README and docs/ resolves", not dead,
+          "; ".join(dead[:4]))
+
+    retired = "constraint layer between LLMs and databases"
+    stale = [d.relative_to(ROOT).as_posix() for d in docs
+             if retired in d.read_text(encoding="utf-8")]
+    check("N2", "no doc still quotes the banner this project retired", not stale,
+          "; ".join(stale))
+
+    sample = (ROOT / "examples" / "sample_schema.sql").read_text(encoding="utf-8")
+    quick = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
+    bad: list[str] = []
+    for table, column in (("shop.orders", "user_id"), ("shop.users", "email")):
+        frac = _null_fraction(sample, table, column)
+        if frac is None or frac == 0.0:
+            bad.append(f"{table}.{column}: cannot recompute")
+            continue
+        want = f"{frac * 100:.1f}% NULL"
+        if f"{table}.{column}" not in quick or want not in quick:
+            bad.append(f"{table}.{column}: quickstart does not say {want}")
+    check("N3", "the NULL fractions the quickstart quotes are the ones the sample inserts",
+          not bad, "; ".join(bad))
+
+
 def main() -> int:
     print("schemafence QA harness — offline, zero dependencies")
     guard_cases()
@@ -1137,6 +1258,7 @@ def main() -> int:
     rulepack_cases()
     inference_cases()
     catalogue_cases()
+    doc_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)
     total = len(RESULTS)

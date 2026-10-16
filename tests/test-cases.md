@@ -24,7 +24,8 @@
 | K. 规则包 | 10 | 0 | 10 PASS |
 | L. 规则推断与事实归一 | 12 | 1（L0 首跑断言写错） | 12 PASS |
 | M. 活库事实与索引归一 | 10 | 1（M1 首跑断言写错） | 10 PASS |
-| **合计** | **129** | **12** | **129 PASS** |
+| N. 文档（链接与数字） | 3 | 0 | 3 PASS |
+| **合计** | **132** | **12** | **132 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
@@ -38,6 +39,9 @@ M0–M9 随 `catalog` 事实模型（`snapshot.py` 的 `build_schema`/`apply_scr
 `rules/index-hygiene.json` 一起进来（见 §M）。M1 首跑同样是**用例自身写错**：把
 `CREATE UNIQUE INDEX` 也当成「主键/唯一约束的又一种写法」，可它不挂约束——`from_constraint`
 本来就该是 `False`。规格该说的是「同一列同一序同一个索引」，「有没有约束」是另一件事。
+N1–N3 随「对外文档合并、并把文档里的数字改成现算」一起进来（见 §N）：两份语料文档合成
+`docs/corpus.md`、两份上手文档合成 `docs/quickstart.md`，同时把「引用的数字必须能从
+`sample_schema.sql` 现算出来」变成门禁。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -349,6 +353,35 @@ M9 是这一层最容易写成假绿的地方：连不上库的时候，最像�
 决定性的那一半：活库行与脚本行经同一个 `build_schema`/`rows_for` 出口，字段逐个相同（M1），
 所以规则分不出自己在读哪一边。真库要验的是另一半：那条查询在 PG16 上返回的行，形状与
 M1 里手写的那一行一致。
+
+## N. 文档（它指的文件、它引的数字）
+
+对外文档有两种静默过期方式，两种都已经真发生过一次：
+
+- **指向一个被改名的文件。** 语料两份合成一份（`pg-corpus.md` + `synthetic-corpus.md` →
+  `corpus.md`），上手两份合成一份（`quickstart-oraclelinux-vm.md` + `quickstart-cloudstudio.md`
+  → `quickstart.md`）。只要有一处旧路径没改，读者点开就是 404，而作者看不到。
+- **抄着一个过期数字。** 那两份上手文档对同一段 live 输出给了两个值：一份写
+  `shop.orders.user_id 12.4% NULL`，另一份写 `20.0% NULL`。数一下
+  `examples/sample_schema.sql`：`shop.orders` 插了 5 行、其中 1 行 `user_id` 是 `NULL`
+  → **20.0%** 才对；`shop.users` 4 行、1 行 `email` 为 `NULL` → **25.0%**。
+  12.4% 那一版是更早样本量的残留。
+
+所以这一节不检查代码，检查**文档与代码是否还说同一件事**：数字从 `sample_schema.sql` 现算，
+链接从文件系统现查。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| N1 | 链接健康 | `README.md` + `docs/*.md` | 抽出全部相对链接，逐个解析 | 每个都指向存在的文件（外部 URL 与 `#` 锚点跳过） | 0 dead | PASS |
+| N2 | 陈旧引用 | 同上 | 搜已退役的横幅文字 | 没有任何文档还在引用它 | 0 | PASS |
+| N3 | 数字保真 | `examples/sample_schema.sql` | `_null_fraction()` 现算两个列的 NULL 比例，断言 `quickstart.md` 说的就是它 | `shop.orders.user_id` = `20.0% NULL`、`shop.users.email` = `25.0% NULL` 都在文中 | 20.0% / 25.0% | PASS |
+
+N3 是这一节的牙齿：把 `quickstart.md` 里的 `20.0% NULL` 改回 `12.4% NULL`，qa_probe 立刻 FAIL
+（`shop.orders.user_id: quickstart does not say 20.0% NULL`），rc=1。这样 `sample_schema.sql`
+一改，文档里的数字就偷不过去。
+
+**这一节没验的**：程序输出块里的其余数字（`16 finding(s)`、`13 cases`、报告里那些分数）。
+它们要真跑一遍再逐行比对，属于手工动作，本表不含。
 
 ## 已知约定核对
 
