@@ -14,7 +14,7 @@
 > differs from one shop to the next. So the checks have to be addable without a release — and being
 > able to add a rule by describing it in plain words is what makes that worth having.
 >
-> A DBA carries a shelf of databases and only so many hours for each of them. So give each one a
+> A DBA carries a shelf of databases and not enough time for each of them. So give each one a
 > virtual DBA: an agent you talk to in plain words, that inspects that instance on a schedule,
 > diagnoses what it finds, and follows the habits that one instance has. The more instances you
 > carry, the more it pays off.
