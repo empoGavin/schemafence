@@ -28,6 +28,7 @@ TMP = ROOT / "tests" / "tmp"
 TMP.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT))
 
+from schemafence import __version__ as shipped                   # noqa: E402
 from schemafence.agent import route, run_route_selftest          # noqa: E402
 from schemafence.checks_sql import (SQL_SAMPLE_DDL, check_sql,    # noqa: E402
                                     run_sql_selftest)
@@ -1206,9 +1207,10 @@ def _null_fraction(sql_text: str, table: str, column: str) -> float | None:
 def doc_cases() -> None:
     """The outward-facing docs quote numbers and point at files; both go stale in silence.
 
-    All three cases here have already gone wrong once: a link to a file a merge
-    renamed, wording the rewrite retired but left behind in a second doc, and a
-    NULL fraction copied forward from an older sample.
+    Every case here has already gone wrong once or is one edit away from it: a link
+    to a file a merge renamed, wording the rewrite retired but left behind in a
+    second doc, a NULL fraction copied forward from an older sample, and a version
+    the README quotes while the package defines another.
     """
     docs = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     link = re.compile(r"\]\(([^)\s]+)\)")
@@ -1245,6 +1247,13 @@ def doc_cases() -> None:
             bad.append(f"{table}.{column}: quickstart does not say {want}")
     check("N3", "the NULL fractions the quickstart quotes are the ones the sample inserts",
           not bad, "; ".join(bad))
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    quoted = re.search(r"`__version__` is `([^`]+)`", readme)
+    check("N4", "the version the README quotes is the one the package defines",
+          quoted is not None and quoted.group(1) == shipped,
+          f"README says {quoted.group(1) if quoted else 'nothing'}, "
+          f"schemafence.__version__ is {shipped}")
 
 
 def main() -> int:

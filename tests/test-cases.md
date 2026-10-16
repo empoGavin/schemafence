@@ -24,8 +24,8 @@
 | K. 规则包 | 10 | 0 | 10 PASS |
 | L. 规则推断与事实归一 | 12 | 1（L0 首跑断言写错） | 12 PASS |
 | M. 活库事实与索引归一 | 10 | 1（M1 首跑断言写错） | 10 PASS |
-| N. 文档（链接与数字） | 3 | 0 | 3 PASS |
-| **合计** | **132** | **12** | **132 PASS** |
+| N. 文档（链接、数字、措辞、版本） | 4 | 0 | 4 PASS |
+| **合计** | **133** | **12** | **133 PASS** |
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
@@ -43,7 +43,9 @@ N1–N3 随「对外文档合并、并把文档里的数字改成现算」一起
 `docs/corpus.md`、两份上手文档合成 `docs/quickstart.md`，同时把「引用的数字必须能从
 `sample_schema.sql` 现算出来」变成门禁。N2 后来在一次 README 重写里扩了一次：原来只盯退役
 横幅一句话，重写把 `Two halves` 小节名也去掉了，`docs/roadmap.md` 里三处 `the two halves`
-却留着——于是 N2 改成「对着当前口径核措辞」，横幅与已删小节名一起管。
+却留着——于是 N2 改成「对着当前口径核措辞」，横幅与已删小节名一起管。**N4 随「版本号统一到
+0.1.0」一起进来**：`__init__.py` 原本是 `0.2.0`、发布说明草稿是 v0.1.0、README 跟着写 `0.2.0`，
+三处对不上；统一之后加一条用例盯住 README 与包导出的版本是否同一个号。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -372,21 +374,31 @@ M1 里手写的那一行一致。
   and databases` 删了，但同一句话在别的文档里还有；这一轮重写又把 `Two halves` 这个小节名去掉了，
   而 `docs/roadmap.md` 里三处 `the two halves` 留着，指向一个已经不存在的小节。**一份文档改口径，
   另一份不会自己跟着改。**
+- **文档里的版本与代码里的版本各写一遍。** README 的 Status 行要写 `__version__` 是多少（读者要
+  知道自己在看哪个版本），而真值只有 `schemafence/__init__.py` 一处；改代码不改 README，读者就
+  被指到一个不存在的版本号上。
 
-所以这一节不检查代码，检查**文档与代码是否还说同一件事**：数字从 `sample_schema.sql` 现算，
-链接从文件系统现查，措辞对着项目当前的口径核。
+所以这一节不检查代码逻辑，检查**文档与代码是否还说同一件事**：数字从 `sample_schema.sql` 现算，
+链接从文件系统现查，措辞对着项目当前的口径核，版本对着 `schemafence.__version__` 核。
 
 | 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
 |---|---|---|---|---|---|---|
 | N1 | 链接健康 | `README.md` + `docs/*.md` | 抽出全部相对链接，逐个解析 | 每个都指向存在的文件（外部 URL 与 `#` 锚点跳过） | 0 dead | PASS |
 | N2 | 退役措辞 | 同上 | 搜已退役的横幅文字与已删的小节名 | 没有任何文档还带着它们（`README.md` 与 `docs/*.md` 都算） | 0 | PASS |
 | N3 | 数字保真 | `examples/sample_schema.sql` | `_null_fraction()` 现算两个列的 NULL 比例，断言 `quickstart.md` 说的就是它 | `shop.orders.user_id` = `20.0% NULL`、`shop.users.email` = `25.0% NULL` 都在文中 | 20.0% / 25.0% | PASS |
+| N4 | 版本一致 | `schemafence.__version__` | 从 README 抽 `` `__version__` is `X` ``，与包实际导出的值比 | 两边说的是同一个号 | 0.1.0 / 0.1.0 | PASS |
 
-N2 与 N3 都是这一节的牙齿，都是先看见真事故才补的用例。N3：把 `quickstart.md` 里的
-`20.0% NULL` 改回 `12.4% NULL`，qa_probe 立刻 FAIL
-（`shop.orders.user_id: quickstart does not say 20.0% NULL`），rc=1。N2：往 `README.md` 末尾加一行
-注释 `the two halves`，立刻 FAIL（`[README.md — a section name the restructure removed]`），
-131/132。这样 `sample_schema.sql` 一改、口径一改，文档就偷不过去。
+N2 与 N4 都是这一节的牙齿，N3 也有齿，都是先看见真事故（或真会犯的错）才补的用例。
+
+- **N3**：把 `quickstart.md` 里的 `20.0% NULL` 改回 `12.4% NULL`，qa_probe 立刻 FAIL
+  （`shop.orders.user_id: quickstart does not say 20.0% NULL`），rc=1。
+- **N2**：往 `README.md` 末尾加一行注释 `the two halves`，立刻 FAIL
+  （`[README.md — a section name the restructure removed]`），132/133。
+- **N4**：把 README 的 `0.1.0` 改回 `0.2.0`，立刻 FAIL
+  （`[README says 0.2.0, schemafence.__version__ is 0.1.0]`），132/133。**失败消息把两个值都打出来**，
+  省得再去猜是哪边过期了。
+
+这样 `sample_schema.sql` 一改、口径一改、版本号一改，文档就偷不过去。
 
 **这一节没验的**：程序输出块里的其余数字（`16 finding(s)`、`13 cases`、报告里那些分数）。
 它们要真跑一遍再逐行比对，属于手工动作，本表不含。

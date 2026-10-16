@@ -12,7 +12,7 @@ deliberately not wired to each other. To run the thing instead, see [`quickstart
 | Answer a question your runbook has the answer to | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
 | Diagnose a live instance | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
 | Run everything offline, no database and no key | `python demo.py` | all of the above except the live reads |
-| The regression gate | `python tests/qa_probe.py` | 132 cases |
+| The regression gate | `python tests/qa_probe.py` | 133 cases |
 
 **One gap worth naming:** the statement checks (S1 and S3, "a measure summed after a one-to-many
 join", "a `LEFT JOIN` cancelled by a `WHERE`") have **no command-line entry** — there is no
@@ -46,7 +46,7 @@ Front doors and harness:
 | --- | --- |
 | `demo.py` | Audits a schema and runs the selftests. Offline by default, `--db` to add the live read. |
 | `agent_cli.py` | `--ingest`, `--ask`, `--eval`, `--tune`, `--genq`, `--report`. |
-| `tests/qa_probe.py` | 132 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
+| `tests/qa_probe.py` | 133 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
 | `scripts/` | Corpus converters, the pgvector ingest, the benchmark trio and its report generator, `setup_pg.sh`, `test_layers.py`. |
 | `rules/` | Three shipped rule packs: `table-hygiene`, `change-review`, `index-hygiene`. |
 

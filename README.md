@@ -428,11 +428,11 @@ the error text you saw — `could not connect`, `ModuleNotFoundError: No module 
 
 ## Status
 
-**Early, and unreleased — there is no tag yet; `__version__` is `0.2.0`.** The offline path runs
+**Early, and unreleased — there is no tag yet; `__version__` is `0.1.0`.** The offline path runs
 end to end; live mode is partly wired up. Done: checks 1–4 and
 hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
 catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, the
-change-action reader, 9 rules in three shipped rule packs, and 132 offline QA cases. Rules are
+change-action reader, 9 rules in three shipped rule packs, and 133 offline QA cases. Rules are
 files: a pack is verified against its own examples when it loads, a rule can be searched for from
 a description and two scripts (`--infer`), a pack that repeats or contradicts itself is caught
 before it is applied, and a pack that needs facts from the live catalog is refused over a script
