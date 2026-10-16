@@ -240,7 +240,7 @@ def main(argv=None) -> int:
 
     print()
     rule("=")
-    print("next: docs/quickstart-oraclelinux-vm.md (or -cloudstudio) · "
+    print("next: docs/quickstart.md · "
           "examples/sample_schema.sql to try your own")
 
     thresholds = {"never": None, "low": 100, "medium": 1, "high": 0}

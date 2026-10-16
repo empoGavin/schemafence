@@ -1,6 +1,9 @@
 # schemafence
 
 [![qa](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml/badge.svg)](https://github.com/empoGavin/schemafence/actions/workflows/qa.yml)
+[![python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](.github/workflows/qa.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![dependencies](https://img.shields.io/badge/dependencies-one%2C%20and%20only%20for%20--db-brightgreen)](requirements.txt)
 
 > Four things a DBA has on their desk: a script to review, a query somebody says is returning the
 > wrong number, a question you would otherwise go to the runbook for, and a live instance to
@@ -37,32 +40,19 @@
 > 脚本审核的规则能自己加：用自然语言说清你要审什么、再给两个例子，它就是一条能用的规则，不用改
 > 代码。用规则时不过模型，规则本身先过自己的用例门禁。
 
-## Two halves, and one rule about how they meet
+**Contents** — [Quick start](#quick-start) ·
+[What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) ·
+[Ask it a question](#ask-it-a-question) · [Review a script](#review-a-script-or-a-query) ·
+[Add a rule by describing it](#add-a-rule-by-describing-it) ·
+[A rule that needs the live database](#a-rule-that-needs-the-live-database) ·
+[Environment](#environment) · [Status](#status) · [Known limitations](#known-limitations) ·
+[FAQ](#faq) · [Contributing](#contributing)
 
-Most database AI tools ship one of these and let it stand in for the other: a diagnostic
-answer and a write-capable connection in the same process with nothing in between.
-
-|                | **The agent** (knowledge side)                      | **The deterministic half**                               |
-| -------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| Answers        | "orders 表为什么这么慢？" · "idle in transaction 有什么后果？" | **the reviewer** "数字对不对？" · **the fence** "允许执行吗？"     |
-| Decides by     | retrieval, tool evidence, optionally a model        | fixed rules, no model and no retrieval                   |
-| Nature         | probabilistic: a wrong answer is bad advice          | deterministic: a wrong decision damages data silently    |
-| Tuning         | corpus, chunk/overlap/top-k, floor, embedder, model | **the reviewer**: rules are files, and more can be added · **the fence**: its thresholds are configuration, its decision logic is not |
-| Evidence       | [`eval/report-dba.md`](eval/report-dba.md) — 44 questions, hit rate per note | `demo.py` selftest — 13 guard + 10 router + 7 tool + 12 sql-check cases; [`docs/bench.md`](docs/bench.md) — JSON vs pgvector at 40 and 4000 chunks |
-| Lives in       | `schemafence/agent.py`, `schemafence/knowledge.py`  | `checks.py` + `checks_sql.py` + `rules/*.json` (reports) · `guard.py` (decides) |
-
-Two gates sit in that half, and they do not share an input set. **The reviewer**
-(`checks.py`, `checks_sql.py`, and the rule packs under `rules/`) reads what is about to be
-deployed, either a schema or a statement plus a schema, and only reports. It can read a
-script that contains writes, because it runs nothing. **The fence** (`guard.py`) reads what is
-about to execute and decides; it only ever sees read-only statements, and it blocks DDL
-outright. So a script that changes the schema never reaches `guard()`: a person reads the report
-and decides. A person, a migration tool and a model all write these scripts, and the reviewer
-does not care which of them it is.
-
-The two halves meet in one place: `Toolbox` in `schemafence/tools.py`. Retrieved passages go into
-the answer text and no further, and `guard()` alone decides whether a statement runs — so
-a mediocre retrieval score is a quality problem, not a safety one.
+Docs: [architecture](docs/architecture.md) — which file does what ·
+[quickstart](docs/quickstart.md) — offline, then a real database ·
+[corpus](docs/corpus.md) — what to load and how well it answers ·
+[bench](docs/bench.md) — the numbers and how to reproduce them ·
+[roadmap](docs/roadmap.md) — what is built and what is next
 
 ## Quick start
 
@@ -97,7 +87,47 @@ python -m schemafence.review --rules rules/table-hygiene.json \
        --rules rules/change-review.json --ddl examples/change_script_review.sql
 ```
 
-## Half one — the agent
+## What it will do to your database, and what it will not
+
+Read-only is not a setting here, it is the shape of the thing. Every command below obeys three
+statements:
+
+- **A review runs nothing.** The reviewer reads a schema, a script, or a query, and prints
+  findings. It opens no transaction, so a script full of `DROP` and `ALTER` is a normal input
+  rather than something it has to be trusted with.
+- **Anything that executes goes through one gate.** The agent's four tools all pass `guard()`,
+  which lets read-only statements through, refuses DDL, and writes every call to
+  `agent_trace.jsonl` with the decision, the layer and the duration.
+- **No model decides whether a statement may run.** The checks and the gate are fixed code, and
+  retrieved text goes into the answer and no further.
+
+A fourth thing sits beside those two, and it is the one allowed to be wrong: the
+question-answering side (`schemafence/agent.py`, `schemafence/knowledge.py`). A bad answer is bad
+advice, not damaged data, so what it has instead of a guarantee is a hit rate per question over 44
+of them — [`eval/report-dba.md`](eval/report-dba.md). Its two questions of record are *why is the
+orders table slow* and *what does `idle in transaction` cost us*; storage numbers under both
+backends are in [`docs/bench.md`](docs/bench.md).
+
+The reviewer and the fence do not share an input, and that is the part worth knowing:
+
+|  | **the reviewer** — reports | **the fence** — decides |
+| --- | --- | --- |
+| Reads | a schema, a script, or a query plus a schema | the statement that is about to run |
+| Input may contain writes | yes — it runs nothing | no — read-only only, DDL refused outright |
+| Hands back | findings, each with a why and a fix | allow or block, and the layer that stopped it |
+| Changed by | rules are files under `rules/`, and more can be added | thresholds are configuration; the decision logic is not |
+| Lives in | `checks.py`, `checks_sql.py`, `rules/*.json` | `guard.py` |
+
+So a change script never reaches the gate. `guard()` refuses DDL by construction, so the script
+goes to the reviewer, the report goes to a person, and the person decides — that is the flow, not
+a gap in it. A person, a migration tool and a model all write these scripts, and the reviewer does
+not care which of them it is.
+
+The two gates meet in one place, `Toolbox` in `schemafence/tools.py`: retrieved passages go into
+the answer text and no further, so a mediocre retrieval score is a quality problem, not a safety
+one.
+
+## Ask it a question
 
 `demo.py` audits a schema. `agent_cli.py` answers questions against one, choosing
 between the knowledge base and the live catalogue.
@@ -141,14 +171,14 @@ your own. **Corpus shape decides retrieval quality more than size does:** the ha
 scores 100% top-5 over 50 questions while the full manual scores 82.5% over 40, and merging
 them costs the runbook questions 30 points while costing the syntax questions nothing. Sizes,
 the measured cost of merging (96.8% → 74.6% over 201 questions, 89.7% at `--k 20`) and the
-pgvector ingest shapes are in [`docs/pg-corpus.md`](docs/pg-corpus.md); rules for notes that
-cannot leave a company are in [`docs/synthetic-corpus.md`](docs/synthetic-corpus.md). `--eval`
+pgvector ingest shapes are in [`docs/corpus.md`](docs/corpus.md), along with the rules for notes
+that cannot leave a company. `--eval`
 is a measuring stick, not a gate: 44 questions over 40 chunks come out at **97.7% top-5**
 offline, with the relevance floor named rather than guessed.
 
-## Half two — the reviewer and the fence
+## Review a script, or a query
 
-### Why it exists
+### The failure it is aimed at
 
 NL2SQL has had a few years now, and the hard part turned out to be the database rather than
 the language model. The common failure is not a syntax error but a misread schema: the wrong
@@ -169,11 +199,11 @@ The query runs and returns a plausible number — nothing raises an error, the r
 | S   | **SQL-side semantics** *(S1, S3)* | A measure summed after a one-to-many join has multiplied it; a `LEFT JOIN` cancelled by a `WHERE` on the right table                                                            |
 | 6   | **Runtime guardrails**            | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 
-Checks 1–4, S and the guardrails run with or without a database. Check 5 needs a live
-connection and is partly wired up. The reviewer reads a script in two passes — the schema it
-leaves behind, and the actions it takes to get there — and its rule set is a file, so adding a
-rule does not mean editing the engine. The vocabulary and the tiers above it are in
-[`docs/roadmap.md`](docs/roadmap.md).
+Checks 1–4, S and the seven layers run with or without a database. Check 5 needs a live connection
+and is partly wired up. The reviewer reads a script in two passes — the schema it leaves behind,
+and the actions it takes to get there — and its rules are files, so adding one does not mean
+editing the engine. Which rules exist, which checks are still missing, and what each of them needs
+is in [`docs/roadmap.md`](docs/roadmap.md).
 
 ### Reviewing somebody else's script
 
@@ -366,8 +396,7 @@ print(len(review_ddl([pack], open("colleague.sql").read()).findings))
 
 With a live database (optional): `bash scripts/setup_pg.sh` covers the `apt` and `dnf` families,
 then `python demo.py --db postgresql://…/fence_demo` — step by step in the
-[Oracle Linux 10 VM](docs/quickstart-oraclelinux-vm.md) or
-[Cloud Studio](docs/quickstart-cloudstudio.md) quickstart. A question the agent refuses:
+[Oracle Linux 10 VM or Cloud Studio](docs/quickstart.md) walkthrough. A question the agent refuses:
 
 ```
 [ask] 帮我删掉 orders 这张表
@@ -376,12 +405,34 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
   you need the data changed, that has to go through a change request against a write-capable role.
 ```
 
+## Environment
+
+|  |  |
+| --- | --- |
+| Python | 3.10 – 3.13. CI runs `demo.py` and every rule pack on all four |
+| Third-party packages | **none** for `demo.py`, the reviewer and the rule packs. `pip install -r requirements.txt` installs one line, `psycopg[binary]>=3.1`, needed only for `--db` |
+| Database | PostgreSQL, only for `--db`. The vector store needs `pgvector` and its HNSW index |
+| Embedding and chat | no SDK. Both are plain HTTPS calls made with `urllib`, so switching provider is an environment variable: `SF_EMBED_API_KEY`, `SF_LLM_API_KEY`, and their `_BASE_URL` / `_MODEL` partners. Anything OpenAI-compatible works |
+| Network | not needed. The offline path, the selftests and the rule packs make no request |
+| OS | anywhere Python runs. CI is `ubuntu-latest`; the two walkthroughs are [Oracle Linux 10 and Cloud Studio](docs/quickstart.md) |
+
+```bash
+git clone https://github.com/empoGavin/schemafence && cd schemafence
+python demo.py                     # offline path: nothing to install, no key, no database
+pip install -r requirements.txt    # only when you are about to use --db
+```
+
+When a step fails, the [quickstart](docs/quickstart.md) ends with a troubleshooting table keyed by
+the error text you saw — `could not connect`, `ModuleNotFoundError: No module named 'psycopg'`,
+`pgvector = NOT INSTALLED`.
+
 ## Status
 
-**Early. The offline path runs end to end; live mode is partly wired up.** Done: checks 1–4 and
+**Early, and unreleased — there is no tag yet; `__version__` is `0.2.0`.** The offline path runs
+end to end; live mode is partly wired up. Done: checks 1–4 and
 hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
 catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, the
-change-action reader, 9 rules in three shipped rule packs, and 129 offline QA cases. Rules are
+change-action reader, 9 rules in three shipped rule packs, and 132 offline QA cases. Rules are
 files: a pack is verified against its own examples when it loads, a rule can be searched for from
 a description and two scripts (`--infer`), a pack that repeats or contradicts itself is caught
 before it is applied, and a pack that needs facts from the live catalog is refused over a script
@@ -420,6 +471,36 @@ schema, and S2/S4/S5/S6.
   under review adds, which are carried onto the catalog facts because that is the state the
   migration leaves behind.
 
+## FAQ
+
+**It printed `0 finding(s)`. Did my script pass?**
+Check the exit code first. `python -m schemafence.review` exits **0** when it read the file and
+nothing fired, **1** when something fired, and **2** when it could not review — a pack that failed
+its own examples, or a file where the reader recognised nothing at all. The schema audit is the
+exception: `python demo.py --source <file>` still prints `0 finding(s)` over a file it read nothing
+of. That one is R10 in [`docs/roadmap.md`](docs/roadmap.md) and is not fixed yet.
+
+**A rule pack says `WAS NOT APPLIED`. Why?**
+The pack names the facts it needs, and a run that did not read them is refused rather than reported
+clean. `rules/index-hygiene.json` needs the catalog, so it is refused over a script alone. That is
+the pack working, not an error. The note under `[notes]` names the command that supplies the
+missing facts, usually `--db <dsn>`.
+
+**Can I switch off a guardrail layer?**
+No. `guard.py`'s decision logic is code, and a fence a committed JSON file could switch off is not
+a fence. Its table whitelist and its row cap are configuration. Rule packs configure the reviewer,
+not the fence.
+
+**Why are the offline scores not comparable with an API model's?**
+The offline embedder is a hashed lexical vector, not a semantic one: its hits land at 0.089–0.285
+where an API model lands at 0.5–0.7. That is why the relevance floor is chosen from
+`embedder.mode` rather than fixed at one number.
+
+**Do I need an API key?**
+No. `python demo.py`, the reviewer, the rule packs and the whole test suite run with no key and no
+network. A key only changes which embedder answers questions — and `--db` says nothing about keys,
+so `--db` with no key is a supported configuration.
+
 ## Why I built this
 
 I spent 21 years as an Oracle DBA (OCM), leading zero-downtime Oracle-to-distributed-DB
@@ -438,6 +519,7 @@ model with least, which is why it is written as fixed rules.
 
 Issues and PRs welcome — especially **real-world examples of plausible-but-wrong SQL**
 (sanitized, please). They become test cases; use the [issue template](.github/ISSUE_TEMPLATE/wrong-sql.md).
+The issue tracker is also how you reach a person: there is no chat room and no mailing list.
 
 Write the way the opening reads: name the script, the query, the symptom or the instance first,
 and introduce the layer only after the reader has recognised the work. Use the verb for the work

@@ -1,4 +1,4 @@
-"""schemafence — a script, a query, a live instance, a runbook.
+"""schemafence — review a script, check a query, answer from the runbook, diagnose a live instance.
 
 A DBA has four things on their desk: a script to review, a query somebody says is returning the
 wrong number, a question you would otherwise go to the runbook for, and a live instance to

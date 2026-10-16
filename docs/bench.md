@@ -505,7 +505,7 @@ python3 scripts/make_scale_corpus.py --notes 2000 --out examples/knowledge-scale
   要更大的量就加 `--notes`，片数线性涨（约 2 片/篇）。
 - **注意**：这是**资源基准**语料，由模板生成、刻意重复。
   **不要拿它评检索质量**——重复措辞会把命中率抬高，那没有意义。
-  语料性质与合规说明见 [`synthetic-corpus.md`](synthetic-corpus.md)。
+  语料性质与合规说明见 [`corpus.md`](corpus.md)。
   `examples/knowledge-scale/` 已在 `.gitignore` 里，入库的是生成脚本。
 
 ### 12.2 跑两个后端（必须分进程）

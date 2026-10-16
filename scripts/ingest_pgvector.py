@@ -38,7 +38,7 @@
   再灌一次。
 
   （另一条干净的路是 `--mode api`：真实嵌入没有 IDF，分几次灌都一致。
-  见 docs/pg-corpus.md 第五节。）
+  见 docs/corpus.md 的《合并的真实代价》一节。）
 """
 
 from __future__ import annotations
@@ -318,7 +318,7 @@ def main() -> int:
         print("# ② 逐个题库量它的命中率 —— 五套题库都指向同一个库，")
         print("#    这正是「合并之后哪些问题变难了」的直接量尺")
         print("#    注意 --k 20：合并库有 3000+ 片，正确篇章平均下沉 2–3 名，")
-        print("#    默认的 --k 5 会低估这个库（实测 74% vs 90%，见 docs/pg-corpus.md）")
+        print("#    默认的 --k 5 会低估这个库（实测 74% vs 90%，见 docs/corpus.md）")
         for db_i, _corpus_i, eval_i in CORPORA:
             print(f"python agent_cli.py --db {dsn} --store {store} \\")
             print(f"                    --corpus {corpus} --eval --eval-file {eval_i} --k 20"
