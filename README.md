@@ -5,9 +5,21 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![dependencies](https://img.shields.io/badge/dependencies-one%2C%20and%20only%20for%20--db-brightgreen)](requirements.txt)
 
-> **AI × DBA.** AI writes the statements and it writes the diagnosis. What catches both is DBA
-> judgement — the checks that review a script or a statement, the fence that decides whether one
-> may run, and the criteria a diagnosis is held to.
+> Statements are increasingly written by NL2SQL, and every one of them — however it was written —
+> arrives at the same place: the database, the node the whole application leans on. So the database
+> gets a fence in front of it. A script or a statement is reviewed before anything is done with it,
+> and one gate decides whether a statement may run at all.
+>
+> Reviewing scripts is standing work for a DBA: it arrives in volume, and what counts as a problem
+> differs from one shop to the next. So the checks have to be addable without a release, and writing
+> them is a place a model genuinely helps — say what you want checked in plain words, give two
+> examples, and it is a rule you can use. No code change, no model when the rule runs, and the rule
+> has to pass its own examples first.
+>
+> With that fence in place, a model can be put to work on the database itself: answer a question
+> that would otherwise send you to the runbook, read an instance on a schedule, show what it found
+> and give a conclusion. Inspection and diagnosis get deeper, get easier to use, and are done
+> against the database you actually run.
 >
 > Four things a DBA has on their desk: a script to review, a query somebody says is returning the
 > wrong number, a question you would otherwise go to the runbook for, and a live instance to
@@ -23,19 +35,22 @@
 > which indexes those tables already carry, and what earlier passes found — so it is the agent that
 > knows *this* instance, rather than instances in general.
 >
-> People use NL2SQL to write statements. Those statements are what gets reviewed here. That is this
-> project's answer to what AI does to a database.
->
 > Every statement that runs against a live database passes one fence first, that fence is
 > read-only, and no model decides whether a statement may run.
 >
-> A review rule is added by description: say what you want checked in plain words, give two
-> examples, and it is a rule you can use. No code change, no model when the rule runs, and the
-> rule has to pass its own examples first.
+> 现在写语句这件事越来越多交给 NL2SQL 去做，而这些语句不管是谁写出来的，最后都落到同一个地方：
+> 数据库，整个应用都压着它的那个节点。所以数据库前面得有一道护栏：脚本也好、语句也好，先过一遍审核，
+> 再由一道闸门决定这条语句到底能不能跑。
+>
+> 审脚本是 DBA 常年要干的一份活：量大，而且每个企业对「什么算问题」的标准都不一样。所以审核规则得
+> 能随时加、加的时候不用发版 —— 说清你要审什么、再给两个例子，它就是一条能用的规则，这件事上模型是
+> 真帮得上忙的一环。规则跑起来不过模型，而且规则本身要先过自己那两个例子的门禁。
+>
+> 有了这道护栏，模型就能用到数据库本身上面：答一个原本要去翻运维手册的问题，按计划把活库读一遍、
+> 把读到的摆出来、再给出结论 —— 巡检和诊断因此能做得更深入、也更好用。
 >
 > 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
-> 的问题、诊断一套活库 —— **AI × DBA**：AI 写语句、出诊断，接住它们的是 DBA 的判断力，落在检查里、
-> 闸门里、以及诊断所依据的判据里。
+> 的问题、诊断一套活库。
 >
 > 把脚本丢进去，它先列出这脚本会有什么问题，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有
 > 默认值的列、表上其实早就有个同列同序的索引，只是名字不同。把语句丢进去，它列出这条语句会错在哪，
@@ -44,12 +59,7 @@
 > 并把出处原文贴出来。连上活库，它读出库里现在有什么，也记下上一次读到了什么：哪些表，表上已经
 > 挂着哪些索引，前几轮查出了什么 —— 所以它懂的是**这一套**库，不是「库」这个东西。
 >
-> 别人用 NL2SQL 生成语句，这些语句就是拿到这里来审的。这是本项目对「AI 进入数据库」的回应。
->
 > 执行到活库上的每条语句先过同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
->
-> 脚本审核的规则能自己加：用自然语言说清你要审什么、再给两个例子，它就是一条能用的规则，不用改
-> 代码。用规则时不过模型，规则本身先过自己的用例门禁。
 
 **Contents** — [Quick start](#quick-start) ·
 [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) ·
@@ -567,9 +577,9 @@ form a model can use: recall how the problem was solved before, look at the inst
 description of it, and only then let a statement through. That last step is the one I trust a
 model with least, which is why it is written as fixed rules.
 
-**That is what AI × DBA means in this repository.** The model is on both ends — it writes the
-statements, and it writes the diagnosis — and what sits in the middle is DBA judgement, written
-down as rules a person can read and check rather than as confidence in a model.
+The model sits on both ends — it writes the statements, and it writes the diagnosis — and what sits
+in the middle is DBA judgement, written down as rules a person can read and check rather than as
+confidence in a model.
 
 ## Contributing
 
@@ -582,9 +592,9 @@ and introduce the layer only after the reader has recognised the work. Use the v
 (review a script, diagnose an instance) rather than a noun phrase, and say what something does
 rather than why it was built that way.
 
-**Say where the AI is and where the DBA is, whenever a passage is about either.** This is an
-AI × DBA project: a passage that mentions the model without saying what catches it — or the checks
-without saying what they are catching — tells half the story.
+**Say where the AI is and where the DBA is, whenever a passage is about either.** A passage that
+mentions the model without saying what catches it — or the checks without saying what they are
+catching — tells half the story.
 
 ## License
 
