@@ -1207,8 +1207,8 @@ def doc_cases() -> None:
     """The outward-facing docs quote numbers and point at files; both go stale in silence.
 
     All three cases here have already gone wrong once: a link to a file a merge
-    renamed, a quoted banner from a retired product line, and a NULL fraction
-    copied forward from an older sample.
+    renamed, wording the rewrite retired but left behind in a second doc, and a
+    NULL fraction copied forward from an older sample.
     """
     docs = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     link = re.compile(r"\]\(([^)\s]+)\)")
@@ -1222,11 +1222,15 @@ def doc_cases() -> None:
     check("N1", "every relative link in README and docs/ resolves", not dead,
           "; ".join(dead[:4]))
 
-    retired = "constraint layer between LLMs and databases"
-    stale = [d.relative_to(ROOT).as_posix() for d in docs
-             if retired in d.read_text(encoding="utf-8")]
-    check("N2", "no doc still quotes the banner this project retired", not stale,
-          "; ".join(stale))
+    retired = {
+        "constraint layer between LLMs and databases": "the banner the project retired",
+        "two halves": "a section name the restructure removed",
+    }
+    stale = sorted({f"{d.relative_to(ROOT).as_posix()} — {why}"
+                    for d in docs for phrase, why in retired.items()
+                    if phrase in d.read_text(encoding="utf-8")})
+    check("N2", "no doc still carries wording this project retired", not stale,
+          "; ".join(stale[:4]))
 
     sample = (ROOT / "examples" / "sample_schema.sql").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")

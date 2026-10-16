@@ -41,7 +41,9 @@ M0–M9 随 `catalog` 事实模型（`snapshot.py` 的 `build_schema`/`apply_scr
 本来就该是 `False`。规格该说的是「同一列同一序同一个索引」，「有没有约束」是另一件事。
 N1–N3 随「对外文档合并、并把文档里的数字改成现算」一起进来（见 §N）：两份语料文档合成
 `docs/corpus.md`、两份上手文档合成 `docs/quickstart.md`，同时把「引用的数字必须能从
-`sample_schema.sql` 现算出来」变成门禁。
+`sample_schema.sql` 现算出来」变成门禁。N2 后来在一次 README 重写里扩了一次：原来只盯退役
+横幅一句话，重写把 `Two halves` 小节名也去掉了，`docs/roadmap.md` 里三处 `the two halves`
+却留着——于是 N2 改成「对着当前口径核措辞」，横幅与已删小节名一起管。
 
 ## A. guard 闸门（七道闸门正反例 + 绕过）
 
@@ -356,7 +358,7 @@ M1 里手写的那一行一致。
 
 ## N. 文档（它指的文件、它引的数字）
 
-对外文档有两种静默过期方式，两种都已经真发生过一次：
+对外文档有三种静默过期方式，三种都已经真发生过一次：
 
 - **指向一个被改名的文件。** 语料两份合成一份（`pg-corpus.md` + `synthetic-corpus.md` →
   `corpus.md`），上手两份合成一份（`quickstart-oraclelinux-vm.md` + `quickstart-cloudstudio.md`
@@ -366,19 +368,25 @@ M1 里手写的那一行一致。
   `examples/sample_schema.sql`：`shop.orders` 插了 5 行、其中 1 行 `user_id` 是 `NULL`
   → **20.0%** 才对；`shop.users` 4 行、1 行 `email` 为 `NULL` → **25.0%**。
   12.4% 那一版是更早样本量的残留。
+- **把改掉的措辞落在第二份文件里。** README 重写时把退役横幅 `constraint layer between LLMs
+  and databases` 删了，但同一句话在别的文档里还有；这一轮重写又把 `Two halves` 这个小节名去掉了，
+  而 `docs/roadmap.md` 里三处 `the two halves` 留着，指向一个已经不存在的小节。**一份文档改口径，
+  另一份不会自己跟着改。**
 
 所以这一节不检查代码，检查**文档与代码是否还说同一件事**：数字从 `sample_schema.sql` 现算，
-链接从文件系统现查。
+链接从文件系统现查，措辞对着项目当前的口径核。
 
 | 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
 |---|---|---|---|---|---|---|
 | N1 | 链接健康 | `README.md` + `docs/*.md` | 抽出全部相对链接，逐个解析 | 每个都指向存在的文件（外部 URL 与 `#` 锚点跳过） | 0 dead | PASS |
-| N2 | 陈旧引用 | 同上 | 搜已退役的横幅文字 | 没有任何文档还在引用它 | 0 | PASS |
+| N2 | 退役措辞 | 同上 | 搜已退役的横幅文字与已删的小节名 | 没有任何文档还带着它们（`README.md` 与 `docs/*.md` 都算） | 0 | PASS |
 | N3 | 数字保真 | `examples/sample_schema.sql` | `_null_fraction()` 现算两个列的 NULL 比例，断言 `quickstart.md` 说的就是它 | `shop.orders.user_id` = `20.0% NULL`、`shop.users.email` = `25.0% NULL` 都在文中 | 20.0% / 25.0% | PASS |
 
-N3 是这一节的牙齿：把 `quickstart.md` 里的 `20.0% NULL` 改回 `12.4% NULL`，qa_probe 立刻 FAIL
-（`shop.orders.user_id: quickstart does not say 20.0% NULL`），rc=1。这样 `sample_schema.sql`
-一改，文档里的数字就偷不过去。
+N2 与 N3 都是这一节的牙齿，都是先看见真事故才补的用例。N3：把 `quickstart.md` 里的
+`20.0% NULL` 改回 `12.4% NULL`，qa_probe 立刻 FAIL
+（`shop.orders.user_id: quickstart does not say 20.0% NULL`），rc=1。N2：往 `README.md` 末尾加一行
+注释 `the two halves`，立刻 FAIL（`[README.md — a section name the restructure removed]`），
+131/132。这样 `sample_schema.sql` 一改、口径一改，文档就偷不过去。
 
 **这一节没验的**：程序输出块里的其余数字（`16 finding(s)`、`13 cases`、报告里那些分数）。
 它们要真跑一遍再逐行比对，属于手工动作，本表不含。

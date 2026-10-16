@@ -101,7 +101,7 @@ statements:
 - **No model decides whether a statement may run.** The checks and the gate are fixed code, and
   retrieved text goes into the answer and no further.
 
-A fourth thing sits beside those two, and it is the one allowed to be wrong: the
+A fourth thing sits beside those three, and it is the one allowed to be wrong: the
 question-answering side (`schemafence/agent.py`, `schemafence/knowledge.py`). A bad answer is bad
 advice, not damaged data, so what it has instead of a guarantee is a hit rate per question over 44
 of them — [`eval/report-dba.md`](eval/report-dba.md). Its two questions of record are *why is the

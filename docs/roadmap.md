@@ -232,8 +232,8 @@ python -m schemafence.review --rules your-pack.json --ddl colleague.sql
 ```
 
 The model runs while the rule is being written and never afterwards: the review
-path calls only the evaluator. That is the separation the two halves already rest
-on, one level up, because a rule is where a probabilistic step gets frozen into a
+path calls only the evaluator. That is the separation this project is built on,
+one level up, because a rule is where a probabilistic step gets frozen into a
 deterministic one. `--vocabulary` is printed by the module that evaluates, so the
 instructions and the evaluator cannot drift apart.
 
@@ -284,7 +284,7 @@ Three files, three different answers, because the three of them do different thi
 The gap between the first two rows and the third is not one of effort. A reviewer
 configured too loosely reports less; a fence configured too loosely lets a write
 through. So R7 is parameters rather than rules, and it shares this layer's loader
-without sharing its evaluator — the same shape as the two halves of the project,
+without sharing its evaluator — the same two columns the reviewer already has,
 one level down.
 
 ### The fact layer is a registry
@@ -372,7 +372,7 @@ the mistake, which is industry-wide.
   it is the failure the fence exists to prevent. Reviewing a change that a human
   wrote is in scope, and that is `checks.py` and `checks_sql.py`.
 - **Not a general SQL linter.** What separates this from one is determinism, the
-  separation between the two halves, and evidence that can be checked. Six accurate
+  separation between reporting and deciding, and evidence that can be checked. Six accurate
   checks beat fifty approximate ones.
 - **No model in the semantic path.** The moment a check needs a model to decide
   whether a `SUM` is right, it inherits the failure mode it was built to catch.
