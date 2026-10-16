@@ -1,142 +1,129 @@
-# Architecture: which file does what
+# 架构：哪个文件管什么
 
-Read this when you want to change something. It answers *which file do I open*, and which parts are
-deliberately not wired to each other. To run the thing instead, see [`quickstart.md`](quickstart.md).
+想改代码的时候看这篇。它回答**该打开哪个文件**，以及哪些部分是被故意留成不接通的。只想把它跑起来，
+看 [quickstart.md](quickstart.md)。
 
-The project has three parts: **review** (a script or a statement, reported on and never run), a
-**diagnostic agent** (reads an instance, draws a conclusion, remembers what it saw), and **the
-fence** (the one place that decides). The tables below say which file each
-part lives in — including the parts that are not written yet, because "where would this go" is a
-question this file exists to answer.
+项目有三块：**审核**（一份脚本或一条语句，只报告、从不执行）、**诊断 Agent**（读一套活库、给出结论、
+记住看过什么）、**闸门**（唯一做决定的地方）。下面的表说明每一块落在哪个文件里，也包括还没写的部分 ——
+「这东西将来该放哪」正是这篇要回答的问题。
 
-## Entry points
+## 入口
 
-| Your job | Command | Path through the code |
+| 你手上这件事 | 命令 | 代码怎么走 |
 | --- | --- | --- |
-| Review a script somebody wrote | `python -m schemafence.review --rules rules/*.json --ddl colleague.sql` | `review.py` → `ddl.py` → `facts.py` → `rulepack.py` |
-| Review the same script against what the live tables already carry | `python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql` | `snapshot.py` → `facts.py` → `rulepack.py` |
-| Answer a question your runbook has the answer to | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
-| Diagnose a live instance | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
-| Run everything offline, no database and no key | `python demo.py` | all of the above except the live reads |
-| The regression gate | `python tests/qa_probe.py` | 136 cases |
-| Check a query for the number it gets wrong | **no command yet** — R11 | would be `checks_sql.py` |
-| Hand the gate a statement of your own | **no command yet** — R15 | would be `guard.py` |
-| Run a diagnosis, and keep what it found | **no command yet** — R12 | would be `snapshot.py` → `checks.py` → a store of past runs |
+| 审一份别人写的脚本 | `python -m schemafence.review --rules rules/*.json --ddl colleague.sql` | `review.py` → `ddl.py` → `facts.py` → `rulepack.py` |
+| 拿同一份脚本对着活库上已有的东西再审一遍 | `python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql` | `snapshot.py` → `facts.py` → `rulepack.py` |
+| 问一个运维手册里写着答案的问题 | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
+| 诊断一套活库 | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
+| 全离线跑一遍：不要库，也不要 key | `python demo.py` | 除了活库那几处读，上面全都有 |
+| 跑回归门禁 | `python tests/qa_probe.py` | 138 例 |
+| 查一条被人说「数字不对」的查询 | **还没有命令** | 将来是 `checks_sql.py` |
+| 把一条你自己写的语句交给闸门 | **还没有命令** | 将来是 `guard.py` |
+| 跑一次诊断，并把这次的结果留下 | **还没有命令** | 将来是 `snapshot.py` → `checks.py` → 一个存放历次运行的存储 |
 
-**Three gaps worth naming.** The statement checks (S1 and S3, "a measure summed after a one-to-many
-join", "a `LEFT JOIN` cancelled by a `WHERE`") have **no command-line entry** — there is no `--sql`.
-`demo.py` runs them as a selftest and the library exposes `check_sql`, but you cannot hand it your
-own statement and get a report back. That is R11. The gate itself has no front door: it is a library
-function, so a statement *you* wrote can only reach it from Python. That is R15. And the diagnostic
-half of the agent — one pass that walks a set of checks over an instance, says what they add up to,
-and keeps the result — has no code at all yet; both things it would run on exist, the live read in
-`snapshot.py` and the schema checks in `checks.py`. That is R12.
+**三个还没有入口的地方。** 语句检查（S1 和 S3：「一对多 JOIN 之后再求和」、「`LEFT JOIN` 被 `WHERE`
+里的条件取消掉」）**没有命令行入口** —— 没有 `--sql`。`demo.py` 拿它做自检，库接口里有 `check_sql`，
+但没办法把自己写的语句递进去换回一份报告。闸门也没有前门：它是个库函数，所以**你**写的语句只能从
+Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、把结果加总成一句话、把这次运行留下 —— 一行代码
+都还没有；它要跑的两样东西都已经在了：`snapshot.py` 里的活库读，和 `checks.py` 里的 schema 检查。
+这三处记在 [roadmap.md](roadmap.md) 里。
 
-## The modules
+## 模块
 
-Everything under `schemafence/` is a library; the two scripts at the repo root are front doors.
+`schemafence/` 下面全是库；仓库根上的两个脚本是前门。
 
-| File | What it does |
+| 文件 | 它做什么 |
 | --- | --- |
-| `ddl.py` | Reads a change script: which tables and columns it ends up leaving behind, which indexes and keys it creates, and what actions it takes to get there. Every spelling of the same thing (a `PRIMARY KEY` on the column, in the table body, as a named constraint, added later by `ALTER TABLE`, or by `CREATE UNIQUE INDEX`) collapses into **one** recorded fact. |
-| `snapshot.py` | Reads the same facts out of a running PostgreSQL: tables, columns and indexes from `pg_catalog`, row estimates from `pg_class.reltuples`, NULL fractions from `pg_stats`. `build_schema()` is a pure function so the parsing can be tested offline; `apply_script()` carries the indexes a script under review adds onto the catalog facts. |
-| `facts.py` | The fact registry: which fields a rule may select, for each of the fact models (`ddl`, `schema`, `catalog`), and the providers that produce the rows. `--vocabulary` and `--facts` are both generated from here, so the vocabulary a rule is written against cannot drift from the evaluator that runs it. |
-| `rulepack.py` | A review rule as a **file**: a selection over facts, an assertion, and the examples that prove it. Verifies a pack against its own examples at load time and refuses it otherwise. Owns `review_ddl()` and `review_schema()` (the half both review paths share) and `--infer`. |
-| `checks.py` | The schema checks — resolution, join keys, types and precision, NULL semantics, hygiene. Reads a schema only. |
-| `checks_sql.py` | The statement checks (S1, S3). Reads a query **and** a schema, which is why it is a separate module: a fan-out and a cancelled `LEFT JOIN` are valid on both sides and only visible where the two meet. Reports; never decides. |
-| `guard.py` | The seven layers that decide whether a statement may run: one statement, read-only shape, deny-listed keywords, dangerous functions, table whitelist, forced `LIMIT`, audit and session hardening. This is the one place where the answer is allow or block. |
-| `knowledge.py` | Chunk → embed → store → retrieve. Offline embedder is a hashed lexical vector with corpus IDF; API mode is any OpenAI-compatible endpoint. Two stores: a JSON file, or pgvector with an HNSW index. |
-| `planner.py` | Question → candidate tables → SQL, by keyword. No model. Deliberately not clever: it is the thing that makes the offline path work at all. |
-| `agent.py` | The loop: pick a tool, keep the evidence, answer. Hand-written rather than delegated to a framework. |
-| `tools.py` | The four tools — `search_docs`, `run_sql`, `explain_sql`, `get_table_stats` — and `Toolbox`, the single place the knowledge side and the execution side meet. |
-| `review.py` | The command line for reviewing a script, plus `--verify`, `--vocabulary`, `--facts`, `--infer`, `--write`. Exit code 0 clean / 1 rule fired / 2 could not review. |
-| `__init__.py` | The public surface, listed with signatures. |
+| `ddl.py` | 读一份变更脚本：最后留下哪些表和列、建了哪些索引和键、为此做了哪些动作。同一个东西的各种写法（列上的 `PRIMARY KEY`、写在表体里、写成具名约束、事后 `ALTER TABLE` 加、`CREATE UNIQUE INDEX`）都塌成**一条**记录下来的事实。 |
+| `snapshot.py` | 从跑着的 PostgreSQL 里读同一批事实：表和列、索引来自 `pg_catalog`，行数估计来自 `pg_class.reltuples`，NULL 比例来自 `pg_stats`。`build_schema()` 是纯函数，所以解析可以离线测；`apply_script()` 把待审脚本建的索引并到库里已有的事实上。 |
+| `facts.py` | 事实注册表：每个事实模型（`ddl`、`schema`、`catalog`）上规则可以选哪些字段，以及产出这些行的 provider。`--vocabulary` 和 `--facts` 都由它生成，所以对着规则写出来的词表不会和跑它的求值器走散。 |
+| `rulepack.py` | 一条审核规则是一个**文件**：对事实的一次选择、一条断言，和证明它的例子。加载时先拿它自己的例子验一遍，不对就拒收。`review_ddl()` 和 `review_schema()`（两条审核路径共用的那一半）以及 `--infer` 都在这里。 |
+| `checks.py` | schema 检查：命名撞车、连接键、类型与精度、NULL 语义、卫生。只读一份 schema。 |
+| `checks_sql.py` | 语句检查（S1、S3）。它同时读一条查询和一份 schema；这两类问题单看任一侧都是合法写法，只有两边合看才露出来。只报告，从不下判断。 |
+| `guard.py` | 七层：单语句、只读形状、关键字黑名单、危险函数、表白名单、强制 `LIMIT`、审计与会话加固。这是唯一给出「放行还是拦住」的地方。 |
+| `knowledge.py` | 切片 → 嵌入 → 存储 → 检索。离线嵌入是带语料 IDF 的哈希词袋；API 模式接任何 OpenAI 兼容端点。两种存储：一个 JSON 文件，或带 HNSW 索引的 pgvector。 |
+| `planner.py` | 问题 → 候选表 → SQL，按关键词。不用模型。 |
+| `agent.py` | 那个循环：挑工具、留证据、作答。手写，没有交给框架。 |
+| `tools.py` | 四个工具 —— `search_docs`、`run_sql`、`explain_sql`、`get_table_stats` —— 和 `Toolbox`：知识这一侧和执行那一侧唯一的交汇点。 |
+| `review.py` | 审脚本用的命令行，外加 `--verify`、`--vocabulary`、`--facts`、`--infer`、`--write`。退出码 0 干净 / 1 规则命中 / 2 审不了。 |
+| `__init__.py` | 对外的接口，带签名列出来。 |
 
-Front doors and harness:
+前门和测试脚手架：
 
-| File | What it does |
+| 文件 | 它做什么 |
 | --- | --- |
-| `demo.py` | Audits a schema and runs the selftests. Offline by default, `--db` to add the live read. |
-| `agent_cli.py` | `--ingest`, `--ask`, `--eval`, `--tune`, `--genq`, `--report`. |
-| `tests/qa_probe.py` | 136 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
-| `scripts/` | Corpus converters, the pgvector ingest, the benchmark trio and its report generator, `setup_pg.sh`, `test_layers.py`. |
-| `rules/` | Three shipped rule packs: `table-hygiene`, `change-review`, `index-hygiene`. |
+| `demo.py` | 审一份 schema，并跑自检。默认离线，加 `--db` 才有活库那几处读。 |
+| `agent_cli.py` | `--ingest`、`--ask`、`--eval`、`--tune`、`--genq`、`--report`。 |
+| `tests/qa_probe.py` | 138 条离线用例，包括不让规则包悄悄长胖的那几道合并门禁，和让文档里引用的数字保持诚实的文档检查。 |
+| `scripts/` | 语料转换器、pgvector 灌库、三组基准与基准报告的生成器、`setup_pg.sh`、`test_layers.py`。 |
+| `rules/` | 随仓库发的三个规则包：`table-hygiene`、`change-review`、`index-hygiene`。 |
 
-## Where the facts come from
+## 事实从哪来
 
-There are three sources, and they are not interchangeable. Getting this wrong is the easiest way to
-add a rule that quietly never applies.
+三个来源，不能互相替代。搞错了，加出来的规则会静悄悄地永远不生效。
 
-- **A script is a fact source.** Deterministic, offline, parsed by `ddl.py`.
-- **A live instance is the same facts read by another reader.** `snapshot.py` reads `pg_catalog`
-  read-only; the `--db` axis never writes anything.
-- **A corpus is a list of spellings, not a runtime input.** Every way of writing an index or a key
-  that the PostgreSQL manual documents became a test case in `tests/qa_probe.py`. Documentation
-  produced **tests**; it never touches the execution path, because retrieval is probabilistic and
-  this layer is not allowed to be.
+- **脚本是事实来源。** 确定、离线，由 `ddl.py` 解析。
+- **活库是同一批事实的另一个读者。** `snapshot.py` 只读 `pg_catalog`；`--db` 这条轴从不写任何东西。
+- **语料是写法清单，不是运行时输入。** PostgreSQL 手册里记着的每一种写索引、写键的方式，都变成了
+  `tests/qa_probe.py` 里的一条用例。**文档产出的是用例**；它永远不碰执行路径，因为检索是概率性的，
+  而这一层不许是。
 
-A rule declares which facts it needs in its first lines:
+一条规则在自己的头几行声明它要哪些事实：
 
 ```json
 { "applies_to": ["catalog"], … }
 ```
 
-A pack whose `applies_to` does not match the facts of this run is **not applied** — it is reported as
-`WAS NOT APPLIED`, with the command that would supply the missing facts, and the exit code becomes
-**2**. A rule that could not be evaluated has cleared nothing; saying "0 finding(s)" over it would be
-the same lie as passing a file nobody understood.
+`applies_to` 和这一次读到的事实对不上，这个包就**不应用** —— 打印 `WAS NOT APPLIED`、给出能把缺的
+事实补上的那条命令，退出码变成 **2**。一条没被求值的规则没有替任何人通过任何东西；在这种情况下说
+「0 finding(s)」，和放行一份没人看懂的文件是同一种谎。
 
-## Three parts, and how they touch
+## 三块，以及它们怎么挨着
 
-|  | **Review** — reports | **Diagnose** — reads and concludes | **The fence** — decides |
+|  | **审核** —— 报告 | **诊断** —— 读并下结论 | **闸门** —— 决定 |
 | --- | --- | --- | --- |
-| Reads | a schema, a script, or a statement plus a schema | an instance, read-only, plus the runbook | the statement that is about to run |
-| Input may contain writes | yes — it runs nothing | no — one read-only axis | no — read-only only, DDL refused outright |
-| Hands back | findings, each with a why and a fix | a report, a conclusion, and a memory of the run | allow or block, and the layer that stopped it |
-| Changed by | rules are files under `rules/` | the criteria are notes, cases and procedures; the checks they run on are rules | thresholds are configuration; the decision logic is not |
-| Written in | `checks.py`, `checks_sql.py`, `rules/*.json` | `knowledge.py`, `planner.py`, `agent.py`, `tools.py`, `snapshot.py` | `guard.py` |
-| Built today | checks 1–4, S1 and S3, 9 rules | the live read and the schema checks only | three `Toolbox` calls |
+| 读什么 | 一份 schema、一份脚本，或一条语句加一份 schema | 一套活库（只读），加上运维手册 | 那条正要跑的语句 |
+| 输入里可以有写操作吗 | 可以 —— 它什么都不执行 | 不可以 —— 一条只读轴 | 不可以 —— 只放只读语句，DDL 直接拒 |
+| 交回什么 | 每条 finding 都带一句为什么和一个改法 | 一份报告、一个结论，和这次运行的记忆 | 放行或拦住，以及是哪一层拦的 |
+| 靠什么改 | 规则是 `rules/` 下的文件 | 判据是笔记、案例和流程；它们跑的检查是规则 | 阈值是配置；判断逻辑不是 |
+| 代码在哪 | `checks.py`、`checks_sql.py`、`rules/*.json` | `knowledge.py`、`planner.py`、`agent.py`、`tools.py`、`snapshot.py` | `guard.py` |
+| 今天建成了什么 | 检查 1–4、S1 和 S3、9 条规则 | 只有活库读和 schema 检查 | 三处 `Toolbox` 调用 |
 
-A change script therefore never reaches the gate: `guard()` refuses DDL by construction, so the
-script goes to the reviewer, the report goes to a person, and the person decides.
+所以一份变更脚本永远走不到闸门：`guard()` 从构造上就拒 DDL —— 脚本送去审阅，报告交到人手上，由人决定。
 
-The knowledge side and the execution side meet in one place, `Toolbox` in `tools.py`: retrieved
-text goes into the answer and no further. A mediocre retrieval score is a quality problem, not a
-safety one.
+知识这一侧和执行那一侧只在一个地方交汇，`tools.py` 里的 `Toolbox`：检索到的文字只进到答案里，不再往前。
+检索分数平庸是质量问题，不是安全问题。
 
-## Changing one thing
+## 想改一处东西
 
-| You want to | Change |
+| 你想 | 改哪 |
 | --- | --- |
-| Add a review rule | a new file under `rules/`, or `--infer` from a description and two examples. No code change. |
-| Add a **fact** a rule can select | `facts.py` — register it on the model, and teach the reader that produces it (`ddl.py` or `snapshot.py`) to fill it in. |
-| Add a schema check | `checks.py`, plus a case in `tests/qa_probe.py`. |
-| Add a statement check | `checks_sql.py`. It reports, so it does not belong in `guard.py`. |
-| Change whether a statement may run | `guard.py`. This is the one thing a rule pack cannot touch. |
-| Make every live read pass that gate | `snapshot.py`'s five catalog reads, plus the two defects in `guard.py` that stop two of them passing at all and would silently cut the other three (R13). |
-| Let a person hand the gate a statement | a front door on `guard.py` (R15). The decision stays where it is; the front door is a wrapper around it. |
-| Add a check over a **result** rather than a statement | a new module beside `checks_sql.py`. It reads a result and the expectation it is judged against, reports, and never decides — the same rule the rest of this layer is held to. The offline half needs no database; the live half would go through the gate. |
-| Add a diagnostic pass, or a memory of past ones | a new module. It would read through `snapshot.py` and reuse `checks.py`, and its conclusions would be kept as a store of past runs (R12). |
-| Change the answer quality | the corpus, the chunking, `--k`, or the relevance floor — not the code path. |
-| Add a fact model (e.g. rules over a statement rather than a schema) | `facts.py`, and a reader that produces those rows. `FACT_MODELS` names what exists; `"sql"` is the model not yet built. |
+| 加一条审核规则 | `rules/` 下加一个文件；或者用 `--infer`，从一句描述和两个例子生成。不用改代码。 |
+| 加一个规则能选的**事实** | `facts.py` —— 在模型上注册它，再教会产出它的那个读取器（`ddl.py` 或 `snapshot.py`）把它填上。 |
+| 加一个 schema 检查 | `checks.py`，外加 `tests/qa_probe.py` 里的用例。 |
+| 加一个语句检查 | `checks_sql.py`。它只报告，所以不属于 `guard.py`。 |
+| 改「一条语句能不能跑」 | `guard.py`。这是规则包唯一碰不到的东西。 |
+| 让活库上的每一处读都过闸门 | `snapshot.py` 的五条 catalog 读，加上 `guard.py` 里让其中两条根本过不去、另外三条被悄悄截到 100 行的两个缺陷。 |
+| 让一个人把语句交给闸门 | 给 `guard.py` 加一个前门。决定本身不动；前门只是包在它外面的一层。 |
+| 加一个对**结果**而不是对语句的检查 | 在 `checks_sql.py` 旁边新开一个模块。它读一份结果和用来判它的预期，只报告、从不下判断 —— 这一层其他部分守的就是这条。离线那半不需要数据库；活库那半走闸门。 |
+| 加一趟诊断，或者加一份历次运行的记忆 | 新开一个模块。它通过 `snapshot.py` 读、复用 `checks.py`，结论按历次运行存起来。 |
+| 改答案质量 | 语料、切片、`--k`，或者相关度地板 —— 不是代码路径。 |
+| 加一个事实模型（比如对语句而不是对 schema 的规则） | `facts.py`，外加产出这些行的读取器。`FACT_MODELS` 说明现在有哪几个；`"sql"` 是还没建的那个。 |
 
-## The three axes
+## 三条轴
 
-One switch is not enough to describe how it runs. These are independent:
+一个开关描述不了它怎么跑。这三条互相独立：
 
-| axis | default | switched by | if you leave it out |
+| 轴 | 默认 | 用什么切换 | 不配会怎样 |
 | --- | --- | --- | --- |
-| embedding | hashed lexical vector + corpus IDF | `SF_EMBED_API_KEY` | nothing is downloaded and no SDK is needed |
-| store | JSON file under `.schemafence/` | `--db` → pgvector + HNSW | stays a file on disk, still works |
-| driver | rule-based planner | `--llm openai` + `SF_LLM_API_KEY` | stays deterministic, still answers |
+| 嵌入 | 哈希词袋 + 语料 IDF | `SF_EMBED_API_KEY` | 什么都不下载，也不需要 SDK |
+| 存储 | `.schemafence/` 下的 JSON 文件 | `--db` → pgvector + HNSW | 就是硬盘上一个文件，照样能用 |
+| 驱动 | 基于规则的规划器 | `--llm openai` + `SF_LLM_API_KEY` | 保持确定性，照样能答 |
 
-`--db` says a real database is attached. It says nothing about API keys: `--db` with no key is a
-supported configuration, and both walkthroughs in the quickstart run that way.
+`--db` 表示挂了一个真库，和 API key 无关：`--db` 不配 key 是受支持的配置，快速上手里的两条路都是这么跑的。
 
-## Where the AI is, and where the DBA is
+## 模型在哪，DBA 在哪
 
-The model appears in two places, and neither of them decides. It can drive the tool loop in
-`agent.py` when `--llm openai` is set, and it can be handed the exported vocabulary to draft a rule
-while a person is authoring one. Everything that decides — the checks, the rule evaluator, the
-fence — is a function whose output is reproduced exactly with no model in the room. That split is
-not a limitation of this project; it is the project.
+模型出现在两个地方，两处都不做决定。配了 `--llm openai` 时，它可以驱动 `agent.py` 里的工具循环；
+有人写规则的时候，可以把导出的词表交给它去起草一条。所有做决定的东西 —— 检查、规则求值器、闸门 ——
+都是函数，房间里没有模型时输出一模一样。

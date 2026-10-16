@@ -1,105 +1,85 @@
-# Roadmap
+# 路线图
 
-What is built, what is next, and in what order. Read it as the DBA work it takes over: a script
-reviewed, a statement checked for the number it gets wrong, a question answered from the runbook, a
-live instance diagnosed. The project has three parts — **review**, a **diagnostic agent**, and
-**the fence** — and this file is where the next step of each is written down. The two sections at
-the end say what this project deliberately will not do, because that is the part that keeps it from
-turning into a general-purpose SQL linter.
+已经建起来的、接下来要建的，以及先后顺序。按它要接手的 DBA 活来读：审一份脚本、查一条被人说
+「数字不对」的查询、答一个原本要翻运维手册的问题、诊断一套活库。项目分三块 —— **审核**、
+**诊断 Agent**、**闸门** —— 这份文件记录每一块的下一步。最后两节说明这个项目**不做**什么，
+那也是它不至于长成一个通用 SQL linter 的原因。
 
-## The gap this roadmap fills
+## 这份路线图补的是哪个缺口
 
-`checks.py` reads a schema and never sees a statement. `guard.py` reads a
-statement and never sees a schema. Each is right about what it looks at,
-which is why neither can see this class of mistake:
+`checks.py` 读一份 schema，从来看不见语句。`guard.py` 读一条语句，从来看不见 schema。各自看的东西
+都没错，所以这一类错误两边都看不见：
 
-| What reads | What it eats | What it can see |
+| 谁在读 | 它吃进去什么 | 它能看见什么 |
 | --- | --- | --- |
-| `checks.py` | the DDL only | structural defects. No statement at all. |
-| `guard.py` | the SQL text only | statement shape, keywords, functions, table names, LIMIT. No semantics. |
-| `checks_sql.py` | **both** | errors that live where the two meet |
+| `checks.py` | 只有 DDL | 结构缺陷。语句一概看不见。 |
+| `guard.py` | 只有 SQL 文本 | 语句形状、关键字、函数、表名、LIMIT。看不见语义。 |
+| `checks_sql.py` | **两个都读** | 只有两边合看才露出来的错误 |
 
-A query can be valid, the schema can be valid, and the number that comes back
-can still be wrong. `LEFT JOIN order_items` is fine. `SUM(amount)` is fine.
-`SUM(amount)` after that join is not, and nothing in the database says so.
+一条查询可以合法，schema 也可以合法，返回的数字照样是错的。`LEFT JOIN order_items` 没问题。
+`SUM(amount)` 没问题。那个 join 之后再 `SUM(amount)` 就有问题，而数据库里没有任何东西会说出来。
 
-## S1–S6: the checks, and where they stand
+## S1–S6：这几个检查，以及各自到哪了
 
-The two marked done live in `schemafence/checks_sql.py`. All of them are
-deterministic functions of `(Schema, SQL)`, and none of them needs a database,
-a model, or a network.
+标着 done 的两个在 `schemafence/checks_sql.py` 里。它们全都是 `(Schema, SQL)` 的确定性函数，
+都不需要数据库、模型或网络。
 
-| # | Check | What it catches | Status |
+| # | 检查 | 抓什么 | 状态 |
 | --- | --- | --- | --- |
-| **S1** | fan-out | a measure summed after a one-to-many join has multiplied. Three line items turn one 100 into 300. | done |
-| **S3** | `LEFT JOIN` cancelled by `WHERE` | a condition on the right table in `WHERE` drops every unmatched row, so the outer join behaves like an inner one. | done |
-| S2 | `SUM(DISTINCT …)` | do not reach for `DISTINCT` to undo a fan-out: two legitimate 100s collapse into one 100. | next |
-| S4 | time boundaries | `BETWEEN '2026-01-01' AND '2026-01-31'`, and `<= '… 23:59:59'`, both take in the wrong interval. | next |
-| S5 | mixed time columns | `created_at` where the definition means `paid_at`. Two orders move in or out of the month. | planned |
-| S6 | mixed aggregation level | order-level and line-level columns summed together without converging the grain first. | planned |
+| **S1** | 扇出 | 一对多 join 之后再求和，度量被放大。三条明细把一个 100 变成 300。 | done |
+| **S3** | `LEFT JOIN` 被 `WHERE` 取消 | `WHERE` 里针对右表的条件会把没匹配上的行全丢掉，外连接于是变成内连接。 | done |
+| S2 | `SUM(DISTINCT …)` | 别拿 `DISTINCT` 去抵消扇出：两个各自合理的 100 会塌成一个 100。 | 下一步 |
+| S4 | 时间边界 | `BETWEEN '2026-01-01' AND '2026-01-31'`，还有 `<= '… 23:59:59'`，收进来的区间都不对。 | 下一步 |
+| S5 | 时间列用混 | 定义说的是 `paid_at`，查询写的是 `created_at`。两笔订单因此进出这个月。 | 计划中 |
+| S6 | 汇总粒度用混 | 订单级和明细级的列直接加在一起，没有先归到同一粒度。 | 计划中 |
 
-Two rules hold for every check added here:
+加进这里的每个检查都守两条：
 
-1. **A structure the reader cannot resolve produces a note, never a finding.**
-   An unparsed join, a column that belongs to two tables, a nested query — all
-   of them abstain and say so. A check that guesses is worse than a check that
-   abstains, because the whole point of this half is that its output can be
-   trusted without reading it.
-2. **Nothing here decides whether a statement runs.** These checks report.
-   `guard()` is still the only thing that allows or blocks.
+1. **读取器解不开的结构只出 note，不出 finding。** 解析不了的 join、同属两张表的列、嵌套查询 ——
+   一律弃权并说明。猜出来的检查比弃权的检查更差，因为这一层的输出要能不看就信。
+2. **这里不决定一条语句能不能跑。** 这些检查只报告。放行还是拦住，仍然只有 `guard()` 说了算。
 
-The fan-out check reads uniqueness off the schema: a join key that is a primary
-key or carries a `UNIQUE` constraint joins one row to one row and cannot
-multiply. That is why `ddl.py` records inline `PRIMARY KEY` and `UNIQUE`
-declarations, not just table-level ones.
+扇出检查要的唯一性是从 schema 上读来的：连接键是主键、或者带着 `UNIQUE` 约束，就是一行对一行，乘不出来。
+这就是 `ddl.py` 连写在列上的 `PRIMARY KEY` 和 `UNIQUE` 也记的原因，不只记表级的。
 
-## The four tiers above it
+## 四层，从能离线定下来的排起
 
-Ordered by what can be pinned down without a database, which is also the order
-in which they become testable.
+排序依据是「不用数据库能定下来多少」，也正好是它们变得可测的顺序。
 
-### 1. Static checks — done, extending
+### 1. 静态检查 —— 已建，继续扩
 
-`checks_sql.py`, above. Extending it means adding S2, S4, S5, S6 at the same
-quality bar: one selftest case that fires, and one near miss that must stay
-silent.
+就是上面的 `checks_sql.py`。扩它就是把 S2、S4、S5、S6 按同一条质量标准加进来：一条会命中的自检用例，
+和一条必须保持沉默的近失。
 
-### 2. Step-wise reconciliation — needs a database
+### 2. 逐步对账 —— 需要一个数据库
 
-Split a candidate query into its CTE chain and execute it step by step, printing
-three columns per step: rows, distinct target keys, and measure total. A number
-that moves between steps is where the query went wrong, and it is a far shorter
-search than reading the SQL.
+把候选查询按 CTE 链拆开，一步步执行，每步打印三列：行数、去重后的目标键、度量合计。哪一步数字动了，
+问题就在那一步，比通读 SQL 找起来短得多。
 
-This is `check 5` in its finished form. Today `check 5` only asks whether a row
-count is wildly outside expectation; this asks whether rows and money are
-conserved at every step.
+这是 `check 5` 完成后的样子。今天的 `check 5` 只问行数是不是远远超出预期；这一步问的是每一步的行数和
+金额有没有守恒。
 
-Values are all generated. Nothing here reads a real customer table.
+值全部是生成的。这里不读任何真实客户表。
 
-### 3. Counterexample runs — the highest-value tier
+### 3. 反例运行 —— 价值最高的一层
 
-Turn "does the answer change when the business numbers did not" into code. The
-criterion is invariance, not equality against a known good value:
+把「业务数字没变，答案会不会变」写成代码。判据是不变性，不是和某个已知正确值相等：
 
-| Change on the data side | Expected | If it fails, the query was |
+| 数据侧改动 | 期望 | 如果不对，说明查询 |
 | --- | --- | --- |
-| add one more line item to an order, same total | unchanged | double counting the join |
-| add one legitimate order | moves by exactly that order | dropping rows via `DISTINCT` |
-| split one 30 refund into 10 + 20 | unchanged | deduplicating by amount |
-| add a refund dated after the cut-off | unchanged | wrong boundary |
-| add a refund that is still pending | unchanged | not filtering on status |
+| 给一笔订单再加一条明细，总额不变 | 不变 | 在重复计算 join |
+| 加一笔合法订单 | 正好按这笔订单变 | 被 `DISTINCT` 丢掉了行 |
+| 把一笔 30 的退款拆成 10 + 20 | 不变 | 按金额去重了 |
+| 加一笔日期在截止点之后的退款 | 不变 | 边界写错 |
+| 加一笔还在 pending 的退款 | 不变 | 没有按状态过滤 |
 
-This is metamorphic testing: it needs no hand-derived expected value, only a
-before and an after. Every change runs inside a transaction that is rolled back,
-so the read-only constraint is not broken — the verification gets the same
-safety boundary as the queries it verifies.
+这是蜕变测试：不需要手工推出一个期望值，只要一个改前和一个改后。每次改动都在一个会回滚的事务里跑，
+所以只读这条约束没被破 —— 被验证的查询有那道安全边界，验证本身也有。
 
-### 4. A metric definition layer — the most expensive, and the most valuable
+### 4. 指标定义层 —— 最贵，也最值
 
-Everything above checks the query. This one checks the definition the query is
-supposed to be implementing, because most of these bugs are a definition
-disagreement that no query can settle:
+上面几层检查的是查询。这一层检查查询本该实现的**定义**，因为这类 bug 大多出在定义上的分歧，
+再好的查询也断不清：
 
 ```yaml
 net_sales:
@@ -112,99 +92,82 @@ net_sales:
   boundary: half-open
 ```
 
-Compiled against a query, that file can reject `created_at` where it says
-`paid_at`, `BETWEEN` where it says half-open, and `SUM(DISTINCT …)` where it
-says `SUM`. It is also the only part of this that would version and regression
-test a definition when it changes.
+拿这个文件去比对一条查询：定义里写 `paid_at`、查询写 `created_at`，可以拒；定义说半开区间、查询用
+`BETWEEN`，可以拒；定义说 `SUM`、查询用 `SUM(DISTINCT …)`，可以拒。它也是这四层里唯一能在定义改动时
+给它做版本管理和回归测试的部分。
 
-## Requested, and where each one lands
+## 提过的需求，分别落在哪
 
-Six things were asked for that the tables above do not yet cover; four more came out of reviewing
-the code against them; R11 came out of writing `docs/architecture.md`; and R12 to R15 came out of
-the positioning revision of 2026-10-16, which is where the three parts this project is made of were
-set out. All but R15 read and report; R15 is a front door to the gate rather than a new reader.
-None of them executes a change, so none of them changes what this project is.
+这些需求来自三处：一部分是明确提出来要的，一部分是拿它们对着代码审出来的，还有一部分来自 2026-10-16
+那次定位重订 —— 这个项目由哪三块组成，就是那次定下来的。除 R15 外都是读并报告；R15 是给闸门加一扇前门，
+不是一个新的读取器。没有一条会执行变更，所以没有一条会改变这个项目是什么。
 
-| # | Asked for | Lands in | State |
+| # | 要什么 | 落在哪 | 状态 |
 | --- | --- | --- | --- |
-| **R1** | a table with no primary key is a finding | a rule pack | **done** — `rules/table-hygiene.json`, rule `table-must-have-primary-key` |
-| **R2** | one concept, one standard: naming, type, unit, enum | a rule pack, then tier 4 | partly. The comment rules shipped; naming, unit and enum still need rules, and today only check H and check 1 read naming. |
-| **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Its finished form is R14, where the same question is asked about the whole result rather than the row count alone. |
-| **R4** | a review rule is a description and its examples, not code | `schemafence/rulepack.py`, `schemafence/facts.py`, `rules/*.json` | **done** — the fact registry, the vocabulary, `--infer` and the overlap checks are all below |
-| **R5** | the B-class errors, not only the A class | `checks_sql.py`, then tier 3 | S2, S4, S5, S6, and the counterexample tier. |
-| **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, rule packs | **done** — `ALTER`, `DROP`, `CREATE INDEX`, `COMMENT ON`, DML and session statements are read as actions; every statement no reader claimed is listed by position; a change kind the vocabulary does not declare is reported rather than silently produced; and a file that yields nothing at all exits 2. The same pass collapsed the four spellings of one primary key into one fact, which is what let the rule cover all of them |
-| **R7** | the fence's rule set is configurable | `guard.py` | The seven layers are code. |
-| **R8** | a rule over the statement, not only over the schema | a SQL fact model | `checks_sql.py` has the facts it needs (the FROM chain, join keys, uniqueness) but does not expose them as rows, so every rule written so far reads DDL. |
-| **R9** | a rule that needs what the database already holds | a `catalog` fact model, `pg_index` | **done** — `rules/index-hygiene.json` refuses a script and asks for `--db`; the row shape is held identical to the script reader's by `tests/qa_probe.py` M1. The query itself has not been run against a server yet. |
-| **R10** | the schema audit says when it read nothing, not only the reviewer | `demo.py`, `checks.py` | not done — checks 1 to H are functions of a schema, so a file with no tables in it yields `0 finding(s)` and exit 0 with nothing said. A script holding only `\copy … from 'x.csv'` and `VACUUM FULL;` reproduces it, and the same file through `python -m schemafence.review` exits 2. |
-| **R11** | a query to check, the way a script can be checked | `schemafence/review.py` | not done — `checks_sql.py` has no command line. `demo.py` runs its checks as a selftest and the library exposes `check_sql`, so one of the four jobs on the desk has no front door: you cannot hand it your own query and be handed a report. Found while writing `docs/architecture.md`, which has to say so. |
-| **R12** | a diagnostic run of an instance, and a memory of past ones | a new module, `snapshot.py`, a store of past runs | not done — the pass that walks a set of checks over one instance, prints what came back, and says what the findings add up to; and the memory that would make the agent know *this* instance rather than instances in general. Both things it would run on already exist: the live read and the schema checks. |
-| **R13** | every read this project makes against a live database goes through the one gate | `snapshot.py`, `guard.py` | not done, and blocked on two defects in the gate itself, both measured. L3 deny-lists `COMMENT`, which `TABLES_SQL` and `COLUMNS_SQL` use as a column alias, so those two cannot pass at all; L6 matches `LIMIT` anywhere in the text, so an inner `LIMIT` exempts a statement from the outer cap and the other three would be cut to 100 rows. A catalog read that returns 100 of 300 indexes reports no duplicate index, which is worse than reporting nothing. |
-| **R14** | a result that does not add up is a finding | a new module beside `checks_sql.py` | not done. Two layers judged by one set of criteria: predicted from the schema and its statistics offline, re-checked against the real result when `--db` is attached. It absorbs R3, which was the same question asked about row counts only. The live half would go through the gate. |
-| **R15** | a front door to the gate, so a statement a person wrote can be handed to it | `schemafence/guard.py` | not done: the fence is a library function today. You reach it with `from schemafence import guard`, and nothing on the command line does. The front door is `--sql` and `--file`, exit code 0 allowed / 1 blocked / 2 nothing recognised, printing the verdict, the layer that produced it, and the session-hardening statements the caller has to run for the answer to hold. Only the front door gets built: the decision stays in one pure function, so an HTTP or MCP face over it later is a wrapper rather than a second implementation. |
+| **R1** | 没有主键的表算一条 finding | 一个规则包 | **done** —— `rules/table-hygiene.json`，规则 `table-must-have-primary-key` |
+| **R2** | 一个概念一个标准：命名、类型、单位、枚举 | 先规则包，后第 4 层 | 部分完成。注释类规则已经发了；命名、单位、枚举还缺规则，而且今天只有 check H 和 check 1 读命名。 |
+| **R3** | 行数远远超出预期 | `check 5`，然后第 2 层 | `check 5` 回答一个问题，且需要活库连接。它的完成形态是 R14：同一个问题问整份结果，而不是只问行数。 |
+| **R4** | 一条审核规则是「一句描述 + 它的例子」，不是代码 | `schemafence/rulepack.py`、`schemafence/facts.py`、`rules/*.json` | **done** —— 事实注册表、词表、`--infer` 和重叠检查都在下面 |
+| **R5** | B 类错误，不只是 A 类 | `checks_sql.py`，然后第 3 层 | S2、S4、S5、S6，以及反例那一层。 |
+| **R6** | 一份变更脚本按它做的动作来判，不按它留下的 schema 判 | `ddl.py`、规则包 | **done** —— `ALTER`、`DROP`、`CREATE INDEX`、`COMMENT ON`、DML 和会话语句都按动作读；读取器没有认领的每条语句按位置列出来；词表没有声明的变更种类会被报出来而不是悄悄产出；一个什么都产不出来的文件退出码是 2。同一趟还把主键的四种写法塌成一条事实，规则才盖得住全部四种 |
+| **R7** | 闸门的规则集可配 | `guard.py` | 七层是代码。 |
+| **R8** | 规则能对语句生效，不只对 schema 生效 | 一个 SQL 事实模型 | `checks_sql.py` 手里有它要的事实（FROM 链、连接键、唯一性），但没有把它们导成行，所以到今天为止写出来的规则读的都是 DDL。 |
+| **R9** | 一条需要「库里已经有什么」的规则 | 一个 `catalog` 事实模型、`pg_index` | **done** —— `rules/index-hygiene.json` 拒收一份脚本、要求 `--db`；行形状由 `tests/qa_probe.py` M1 与脚本读取器保持一致。这条查询本身需要一个服务器才能跑通。 |
+| **R10** | schema 审计也要在「什么都没读到」时出声，不只审阅器 | `demo.py`、`checks.py` | 没做 —— 检查 1 到 H 是 schema 的函数，所以一个没有表的文件会产出 `0 finding(s)`、退出码 0，什么也不说。只放 `\copy … from 'x.csv'` 和 `VACUUM FULL;` 的脚本能复现，而同一个文件走 `python -m schemafence.review` 退出码是 2。 |
+| **R11** | 能审一条查询，像审一份脚本那样 | `schemafence/review.py` | 没做 —— `checks_sql.py` 没有命令行。`demo.py` 把它的检查当自检跑，库接口也暴露了 `check_sql`，可是桌面上四件活里有一件没有前门：没法把自己写的查询递进去换回一份报告。 |
+| **R12** | 跑一趟活库诊断，以及一份历次运行的记忆 | 一个新模块、`snapshot.py`、一个存放历次运行的存储 | 没做 —— 那一趟指的是：把一组检查在一套库上走一遍、打印拿回来的东西、说清这些结果加总成什么；还有那份让 agent 懂**这一套**库、而不是懂「库」这个东西的记忆。它要跑的两样东西都已经在了：活库读和 schema 检查。 |
+| **R13** | 这个项目对活库做的每一处读都过同一道闸门 | `snapshot.py`、`guard.py` | 没做，卡在闸门自己的两个缺陷上，两个都实测过。L3 把 `COMMENT` 列进黑名单，而 `TABLES_SQL` 和 `COLUMNS_SQL` 拿它当列别名，所以这两条根本过不去；L6 在文本任意位置匹配 `LIMIT`，于是一个内层 `LIMIT` 就让语句免掉外层上限，另外三条会被截到 100 行。一次只返回 300 条索引里 100 条的 catalog 读，会报出「没有重复索引」—— 比什么都不报更糟。 |
+| **R14** | 对不上的结果是 finding | `checks_sql.py` 旁边的一个新模块 | 没做。两层用同一套判据：离线时从 schema 和统计信息预测，挂上 `--db` 时对着真实结果再核一遍。它吸收 R3 —— R3 是同一个问题，只问行数。活库那一半会走闸门。 |
+| **R15** | 给闸门一扇前门，让一个人写的语句能递进去 | `schemafence/guard.py` | 没做：闸门今天是个库函数。`from schemafence import guard` 够得到它，命令行上没有任何东西够得到。前门是 `--sql` 和 `--file`，退出码 0 允许 / 1 拦住 / 2 什么都没认出来，打印判决、作出判决的那一层，以及为了让这个答案成立、调用方必须执行的会话加固语句。只建前门：决定留在一个纯函数里，所以以后在上面套一个 HTTP 或 MCP 的壳，那是包装而不是第二份实现。 |
 
-R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
-live connection is not a write connection, which is why the `--db` axis has
-always been independent of the key axes.
+R3 守着只读这条规矩。读的是 `pg_class.reltuples` 和 `pg_stats`；活库连接不是写连接，所以 `--db` 这条轴
+一直和 key 那几条轴互相独立。
 
-R6 carries a requirement that outranks the feature: **when the reader recognises
-nothing, it has to say so.** A review that silently returns nothing is worse
-than no review, because zero findings reads as a pass. The discipline already
-holds on both sides of it. `checks_sql.py` abstains with a note instead of
-guessing, and `tests/qa_probe.py` turns a raising selftest into a FAIL line
-rather than letting the crash swallow the summary.
+R6 带着一条比功能本身更重要的要求：**读取器什么都没认出来的时候，必须出声。** 一次静悄悄返回空的审核
+比不审更糟，因为零条 finding 读起来就是通过。这条纪律在它两边都已经成立：`checks_sql.py` 弃权并附一句
+说明，而不是猜；`tests/qa_probe.py` 把抛异常的自检变成一行 FAIL，不让崩溃吞掉汇总。
 
-It holds in the reviewer, and it does not hold in the schema audit yet, which is
-R10. Checks 1 to H are functions of a schema; a script with no tables in it is a
-file they have nothing to say about, and "nothing to say about it" has to be a
-different sentence from "clean".
+它在审阅器里成立，在 schema 审计里还不成立，那就是 R10。检查 1 到 H 是 schema 的函数；一个没有表的脚本
+是它们无话可说的文件，而「对它无话可说」必须是和「干净」不同的一句话。
 
-## A rule set has to be a file
+## 规则集必须是一个文件
 
-R4 and R7 are the two requests with a constraint attached, because being
-deterministic is the whole point of that half of the project. They need
-different answers, and they share one rule: **what is configurable is an
-artefact that is committed**, not a value that is looked up.
+R4 和 R7 是两条带着约束的需求，因为确定性正是这个项目那一部分的全部意义。它们要的答案不同，共用一条规矩：
+**可以配的是一个提交进仓库的产物**，不是一个现查现取的值。
 
-### R7 — the fence's rule set
+### R7 —— 闸门的规则集
 
 | | |
 | --- | --- |
-| May be configured | the table whitelist, the row cap behind `LIMIT 100`, the forbidden function list, the allowed schemas |
-| Configured with care | switches for the seven layers themselves. Turning off L3 is the same as allowing a write inside a CTE. |
-| Never configured | the decision logic |
+| 可以配 | 表白名单、`LIMIT 100` 背后的行数上限、禁用函数清单、允许的 schema |
+| 要谨慎地配 | 七层各自的开关。关掉 L3 等于允许在 CTE 里写数据。 |
+| 永不配置 | 判断逻辑 |
 
-Every load writes the rule set it applied into the audit record. That is what
-makes "who changed the fence" answerable.
+每次加载都会把它应用的规则集写进审计记录。这就是「谁改过闸门」能回答的原因。
 
-The rule set may not be fetched from a database or a service. A fence that
-depends on a row somebody can update is not a fence.
+规则集不许从数据库或服务上取。一道依赖别人能改的那一行的闸门不是闸门。
 
-### R4 — the review rule set, as built
+### R4 —— 审阅器的规则集，实际长什么样
 
-A rule is a declaration over facts the engine already reads. Nothing in the file
-executes. There are four targets with a closed field list each, and this is the
-whole model:
+一条规则是对引擎已经在读的事实的声明。文件里没有任何东西会执行。有四个目标，各自有一份封闭的字段表，
+整个模型就这些：
 
-**a rule selects rows, and says what those rows must satisfy. The findings are
-the selected rows that fail.**
+**一条规则选出若干行，并说明这些行必须满足什么。findings 就是选出来但没满足的行。**
 
-| Target | Fields |
+| 目标 | 字段 |
 | --- | --- |
-| `table` | name, schema, qualified, comment, column_count, primary_key_columns, has_primary_key, unique_key_count, index_count, commented_columns, uncommented_columns, created_by_change, touched_by_change, change_count |
-| `column` | name, table, qualified, type, base_type, nullable, has_default, default, references, comment, is_primary, is_unique, looks_like_key, looks_like_money, looks_like_time, added_by_change, added_by |
-| `index` | name, table, qualified, columns, columns_text, column_count, unique, primary, from_constraint, method, expression, partial, predicate, comparable, created_here, duplicate_count, duplicate_of |
-| `change` | kind, table, column, subject, detail, statement, position |
+| `table` | name、schema、qualified、comment、column_count、primary_key_columns、has_primary_key、unique_key_count、index_count、commented_columns、uncommented_columns、created_by_change、touched_by_change、change_count |
+| `column` | name、table、qualified、type、base_type、nullable、has_default、default、references、comment、is_primary、is_unique、looks_like_key、looks_like_money、looks_like_time、added_by_change、added_by |
+| `index` | name、table、qualified、columns、columns_text、column_count、unique、primary、from_constraint、method、expression、partial、predicate、comparable、created_here、duplicate_count、duplicate_of |
+| `change` | kind、table、column、subject、detail、statement、position |
 
-Selectors, all ANDed: `field` (equals, and `null` means is null), `_in`,
-`_not_in`, `_matches`, `_not_matches`, `_matches_all`, `_present`, `_absent`.
-Assertions: `present`, `absent`, `equals`, `not_equals`, `in`, `not_in`,
-`matches`, `not_matches`, `matches_all`, `matches_none`, `gte`, `lte`. A rule
-over change actions takes `forbid` instead of an assertion — every selected row
-is a finding, which is how "this script drops a table" is written.
+选择器全部按 AND 叠加：`field`（相等，`null` 表示 is null）、`_in`、`_not_in`、`_matches`、`_not_matches`、
+`_matches_all`、`_present`、`_absent`。断言：`present`、`absent`、`equals`、`not_equals`、`in`、`not_in`、
+`matches`、`not_matches`、`matches_all`、`matches_none`、`gte`、`lte`。对变更动作的规则用 `forbid` 代替
+断言 —— 选中的每一行都是 finding，「这份脚本删了一张表」就是这么写的。
 
-`title`, `detail` and `fix` may name a field of the failing row as `{field}`,
-which is how a finding can say *which* other index it collides with.
+`title`、`detail` 和 `fix` 里可以用 `{field}` 引用失败行上的字段，一条 finding 因此能说清它和**哪个**
+别的索引撞了。
 
 ```json
 {
@@ -224,169 +187,121 @@ which is how a finding can say *which* other index it collides with.
 }
 ```
 
-**The examples are not a prompt for a model. They are the acceptance test.** A
-rule that cannot reproduce every label in its own file is refused at load, by
-name, and is not applied — the same bar the hand-written checks are held to, one
-case that fires and one near miss that stays silent. The three packs in `rules/`
-ship with 29 examples between them, and any file is refused if one is wrong.
+**例子不是给模型的提示词，它们是验收测试。** 一条规则如果复现不了自己文件里的每一个标签，加载时就会被
+按名字拒收，并且不被应用 —— 和手写检查守着同一条线：一条会命中，一条近失保持沉默。`rules/` 里三个包共
+29 个例子，任何一个标签不对，整个文件被拒。
 
-The authoring loop, which is the reason "immediately usable" holds at all:
+写规则的循环长这样，这也是「立刻能用」成立的原因：
 
 ```bash
-python -m schemafence.review --vocabulary > vocabulary.json   # the closed vocabulary
-# hand that file, the rule in words, and two examples to a model
-python -m schemafence.review --rules your-pack.json --verify  # refuses it if a label is wrong
+python -m schemafence.review --vocabulary > vocabulary.json   # 词表是封闭的
+# 把这个文件、用文字写的规则、两个例子交给模型
+python -m schemafence.review --rules your-pack.json --verify  # 有一个标签不对就拒收
 python -m schemafence.review --rules your-pack.json --ddl colleague.sql
 ```
 
-The model runs while the rule is being written and never afterwards: the review
-path calls only the evaluator. That is the separation this project is built on,
-one level up, because a rule is where a probabilistic step gets frozen into a
-deterministic one. `--vocabulary` is printed by the module that evaluates, so the
-instructions and the evaluator cannot drift apart.
+模型只在写规则的时候跑，之后再也不跑：审核路径只调求值器。一条规则正是「概率的那一步被冻成确定性的一步」
+的地方。`--vocabulary` 由做求值的那个模块打印，所以说明书和求值器不可能走散。
 
-**The file is JSON, not YAML**, and the reason is the constraint above: this repo
-installs nothing, and JSON is the one strict format in the standard library.
-YAML's implicit typing (`no` becomes False, `1.0` becomes a float, a tab breaks
-the file) is a poor fit for something that decides pass or fail.
+**文件是 JSON，不是 YAML**，理由就是上面那条约束：这个仓库什么都不装，而 JSON 是标准库里唯一严格的格式。
+YAML 的隐式类型（`no` 变成 False、`1.0` 变成浮点、一个 tab 就把文件弄坏）不适合一个决定通过还是不通过
+的东西。
 
-Four rules keep the vocabulary from decaying into approximate:
+四条规矩让词表不至于退化成一个大概：
 
-1. **A rule may not need a fact the engine does not already read.** The day it
-   does, the change is in the reader, not in the file — and that stays visible,
-   because the field name is refused at load instead of quietly never matching.
-   R8 is that boundary: a rule over the statement waits for an SQL fact model.
-2. **A rule that matched nothing says so, by name.** No matched rows means the
-   rule asserted nothing, which is not the same as a pass. The report prints
-   matched and fired per rule so the difference stays visible.
-3. **A script no reader understood exits 2, not 0.** `NOTHING RECOGNISED` with no
-   findings is not a clean review, and that exit code is why a pipeline cannot
-   read it as one.
-4. **An action list is still not an execution path.** A rule that forbids
-   `drop_column` reports it. Nothing in this layer runs a script.
+1. **一条规则不能要求引擎还没在读的事实。** 哪天真要了，改动在读取器里，不在文件里 —— 而且这件事看得见，
+   因为字段名在加载时就被拒收，而不是静悄悄地永远匹配不上。R8 就是这条边界：对语句的规则要等一个 SQL
+   事实模型。
+2. **一条什么都没匹配上的规则要按名字说出来。** 没有匹配行意味着这条规则什么都没断言，那和通过不是一回事。
+   报告按规则分别打印 matched 和 fired，这个差别就看得见。
+3. **没有读取器看懂的脚本退出码 2，不是 0。** `NOTHING RECOGNISED` 加零条 finding 不是干净的审核，那个
+   退出码就是为了让流水线读不出「通过」。
+4. **动作清单仍然不是执行路径。** 一条禁止 `drop_column` 的规则会把它报出来。这一层里没有任何东西会跑脚本。
 
-What changed between the first draft of this section and the built version is
-worth recording. The format moved from YAML to JSON. The fact list grew a third
-target once `ddl.py` learned to read change actions. And both rules that need a
-whole table were narrowed to `created_by_change: true` — the instructive one. An
-`ALTER`-only script names tables whose definitions the reader has never seen, so
-a check for a primary key fires on a table whose key simply is not in the file,
-and the finding is about the script rather than about the schema. The fact had to
-exist first; the report now names the tables it can only see in part instead of
-guessing about them.
+**需要整张表的规则，都收窄到了 `created_by_change: true`**，这条最值得记。只含 `ALTER` 的脚本提到的表，
+读取器从没见过它的定义，所以查主键的规则会在一张「键根本不在这个文件里」的表上命中，那条 finding 说的是
+脚本而不是 schema。事实得先存在；报告现在会点名它只能看见一部分的那些表，而不是对它们瞎猜。
 
-The five checks that already exist stay Python. The rule file layer is for what
-gets added — moving the old ones across is mechanical and can wait until the
-vocabulary stops moving.
+已有的那几个检查继续留在 Python 里。规则文件这一层是给**新加的东西**用的。
 
-### What can be configured, and what cannot
+### 什么可以配，什么不可以
 
-Three files, three different answers, because the three of them do different things.
+三个文件，三个不同的答案，因为它们做的事不一样。
 
-| Where | Reports, or decides | A rule file may change | A rule file may never change |
+| 在哪 | 报告还是决定 | 规则文件可以改 | 规则文件永远不能改 |
 | --- | --- | --- | --- |
-| `checks.py` | reports | any rule over the schema | the facts it reads |
-| `checks_sql.py` | reports | nothing yet — R8 | the facts it reads |
-| `guard.py` | **decides** | the table whitelist, the row cap, the forbidden functions | the seven layers |
+| `checks.py` | 报告 | 任何对 schema 的规则 | 它读的事实 |
+| `checks_sql.py` | 报告 | 现在还不行 —— R8 | 它读的事实 |
+| `guard.py` | **决定** | 表白名单、行数上限、禁用函数 | 七层 |
 
-The gap between the first two rows and the third is not one of effort. A reviewer
-configured too loosely reports less; a fence configured too loosely lets a write
-through. So R7 is parameters rather than rules, and it shares this layer's loader
-without sharing its evaluator — the same two columns the reviewer already has,
-one level down.
+前两行和第三行之间的差距不是工作量的问题。审阅器配得松，报出来的东西少；闸门配得松，写操作就过去了。
+所以 R7 是参数而不是规则：它和这一层共用加载器，不共用求值器，跟审阅器那两个文件的关系一样，只是再低一层。
 
-### The fact layer is a registry
+### 事实层是一个注册表
 
-`rulepack.py` does not know what DDL is. It asks `schemafence/facts.py` for rows
-with named fields, and a provider declares three things: the fields it offers, the
-fact models it can be read from, and how to turn one into rows. Four providers are
-registered — `table`, `column`, `index`, `change` — and R8 is a fifth.
+`rulepack.py` 不知道 DDL 是什么。它向 `schemafence/facts.py` 要带字段名的行，而一个 provider 声明三件事：
+它提供哪些字段、能从哪几个事实模型上读、以及怎么把一条变成若干行。注册了四个 provider —— `table`、
+`column`、`index`、`change` —— R8 是第五个。
 
-This is the whole reason a rule can be added without touching the engine, and it is
-also why the vocabulary cannot drift from the evaluator: `--vocabulary` and
-`--facts` are both built from the registry that applies the rules.
+这就是「加一条规则不用碰引擎」的全部理由，也是词表不可能和求值器走散的原因：`--vocabulary` 和 `--facts`
+都从「应用规则的那份注册表」生成。
 
-### Where the facts come from, and what may not
+### 事实从哪来，什么来源不可以
 
-A fact has one shape and three ways to arrive. That is the answer to "add a rule
-about primary keys and it should find every way somebody writes one":
+一个事实只有一种形状，却有三条到达的路。这就是「加一条关于主键的规则，它应该把每个人写主键的方式都找出来」
+的答案：
 
-| Source | Supplies | Why it is safe |
+| 来源 | 提供 | 为什么安全 |
 | --- | --- | --- |
-| the script under review | tables, columns, keys, indexes, change actions | a parser, deterministic and offline |
-| the live catalog | the same fields, read from `pg_catalog` | a read; the `--db` axis has never been the write axis |
-| the corpus | **the list of spellings**, as test cases | documentation read once by a person, then compiled into `tests/qa_probe.py` |
+| 待审的脚本 | 表、列、键、索引、变更动作 | 一个解析器，确定且离线 |
+| 活库的 catalog | 同一批字段，从 `pg_catalog` 读 | 一次读；`--db` 这条轴从来不是写轴 |
+| 语料 | **写法清单**，作为测试用例 | 文档由人读一次，然后编译进 `tests/qa_probe.py` |
 
-The third row is the one worth stating plainly. Retrieval is probabilistic and the
-review layer is not allowed to be, so the manual is not consulted at review time: it
-is where the list of spellings came from, and the list became cases the reader has
-to pass. Four spellings of a primary key, five of an index, and the assembler's own
-question — "is this index already there?" — answered from the catalog, because a
-script cannot know what the table holds.
+第三行值得说明白。检索是概率性的，审核这一层不许是，所以审的时候不去查手册：手册是那份写法清单的来处，
+而清单变成了读取器必须通过的用例。主键四种写法、索引五种写法，还有装配器的那个问题 ——「这个索引是不是
+已经有了？」—— 从 catalog 回答，因为脚本不可能知道表里有什么。
 
-Which means `applies_to` is enforced rather than documented. A pack that declares
-`["catalog"]` and is handed a script is **not applied**: the run says so, says which
-command would supply the facts, and exits 2. A rule that could not be evaluated has
-not cleared anything, and that has to be visible in the same place a pass is.
+也就是说 `applies_to` 是**被强制执行**的，不是写在文档里的。一个声明 `["catalog"]` 的包被递进来一份脚本，
+**不会应用**：运行时说出来、说出哪条命令能补上这些事实，然后退出码 2。一条没能被求值的规则没有替任何人
+通过任何东西，而这件事必须和「通过」显示在同一个地方。
 
-### Inference, and what it refuses to do
+### `--infer`，以及它拒绝做什么
 
-`--infer` enumerates the closed vocabulary, keeps what fires on every `fires`
-example and stays silent on every `silent` one, and reports the near misses when
-nothing fits. The evaluator used backwards, offline, with no model in the loop.
+`--infer` 枚举封闭词表，留下在所有 `fires` 例子上命中、在所有 `silent` 例子上沉默的候选，一条都不合时就
+报近失。求值器反过来用，离线，循环里没有模型。
 
-It does not synthesise a value it was not given. `present` and `absent` need none,
-numeric bounds come from the examples themselves, and a pattern appears only if the
-request supplied it under `hints.matches`. A regex invented from two samples would
-be a guess wearing a rule's clothing, and this layer exists so that a person can
-read a rule and check it.
+它不合成没人给过它的值。`present` 和 `absent` 不需要值，数值边界来自例子本身，模式只在请求通过
+`hints.matches` 给出来时才出现。从两个样本里编出来的正则是穿着规则外衣的猜测，而这一层存在的意义就是
+让人能读一条规则并核对它。
 
-What it is good for is the case that started this: a requirement that can be
-written several ways. Hand it four spellings of one primary key and it comes back
-with `has_primary_key present` — but only because the reader had already collapsed
-them into one fact. So the search is also a test of the fact layer. Examples the
-vocabulary cannot separate are facts the reader does not collect yet, which is why
-that case exits 2 and names the near misses instead of proposing a rule that would
-never fire.
+它擅长的正是这个项目一开始要处理的那类场景：同一条要求有好几种写法。给它一个主键的四种写法，它回你
+`has_primary_key present` —— 但这只是因为读取器早就把它们塌成了一条事实。所以这个搜索同时也是事实层的
+测试。词表分不开的例子，就是读取器还没收集的事实，所以那种情况退出码 2 并点名近失，而不是提一条永远
+不会命中的规则。
 
-### Overlap, so a pack does not grow by accident
+### 重叠检查，让规则包不会自己长胖
 
-A pack grows by copying a rule and editing it, so the loader looks for what the copy
-did not change. One signature in two rules is refused outright. A rule that sits
-inside a wider one with the same assertion is reported as adding wording only. Two
-rules that select the same rows and disagree are reported as contradicting. Across
-packs, the same rule id in two of them is reported too, because a finding carries
-the id and nothing else — two rules behind one id cannot be told apart in the
-output.
+规则包是靠复制一条规则再改长大的，所以加载器会找「复制之后没改的地方」。一条签名出现在两条规则里，
+直接拒收。一条规则坐落在另一条更宽的规则里、断言相同，报「只多了措辞」。两条规则选同一批行却互相矛盾，
+报「互相冲突」。跨包也一样：同一个规则 id 出现在两个包里也会报，因为一条 finding 带的只有 id，一个 id
+背后两条规则在输出里分不开。
 
-## Prior art
+## 相关工作和出处
 
-The four error patterns in S1–S4 are a well-known class, and they were named
-before this repository existed. 何志华, *AI 写的 SQL 能跑通，为什么结果还是错的？*
-(2026-10-09), sets out the same failure from the semantics side: the query
-executes, the number looks reasonable, and nothing raises an error. That article
-stops at a process — confirm the definition, reconcile intermediate results,
-test with counterexamples. This repository turns the parts of that process that
-can be made deterministic into checks that run offline, with no key and no
-database.
+S1–S4 里的四种错误模式是一类众所周知的问题。何志华《AI 写的 SQL 能跑通，为什么结果还是错的？》
+（2026-10-09）从语义那一侧讲了同一个失败：查询跑得通、数字看着合理、什么都不报错。那篇文章停在流程上 ——
+确认定义、对账中间结果、用反例测。这个仓库把那条流程里能做成确定性的部分做成了离线就能跑的检查，
+不要 key，也不要数据库。
 
-No data or SQL text from that article is used here. The sample schema in
-`checks_sql.py` was written for this repository; what is shared is the shape of
-the mistake, which is industry-wide.
+本仓库里的样例 schema 是为它自己写的；两边共有的是错误本身的形状，而那是整个行业的。
 
-## What this will not do
+## 这个项目不做什么
 
-- **No write path.** Executing a change is not a deeper version of this project,
-  it is the failure the fence exists to prevent. Reviewing a change that a human
-  wrote is in scope, and that is `checks.py` and `checks_sql.py`.
-- **Not a general SQL linter.** What separates this from one is determinism, the
-  separation between reporting and deciding, and evidence that can be checked. Six accurate
-  checks beat fifty approximate ones.
-- **No model in the semantic path.** The moment a check needs a model to decide
-  whether a `SUM` is right, it inherits the failure mode it was built to catch.
-- **No third-party dependency on the main path.** `python demo.py` has to work
-  on a fresh clone with nothing installed. Anything that needs a parser library
-  belongs behind a flag, not in the default path.
-- **No Oracle migration diff yet.** The README says the same in one line: it is not
-  built, and it is a different story from this one. It happens after the tiers above
-  are solid.
+- **没有写路径。** 执行一次变更不是这个项目的深水区，它是闸门存在的理由本身。审一份人写的变更在范围内，
+  那就是 `checks.py` 和 `checks_sql.py`。
+- **不是通用 SQL linter。** 把它和 linter 分开的是确定性、报告与决定的分离，以及可以被核对的证据。
+  六条准确的检查胜过五十条大概的。
+- **语义路径上没有模型。** 一个检查一旦要靠模型判断 `SUM` 对不对，它就继承了它本要抓的那个失败模式。
+- **主路径上没有第三方依赖。** `python demo.py` 必须在刚 clone 下来、什么都没装的机器上能跑。任何需要
+  解析库的东西都放 flag 后面，不进默认路径。
+- **Oracle 迁移差异对比还没有做。** 它和上面那几层是另一个故事，等那几层稳了再说。

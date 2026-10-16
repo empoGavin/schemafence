@@ -33,28 +33,6 @@
 > DDL is refused, and no model decides whether a statement may run. What does not reach it yet is
 > named in [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not).
 >
-> 现在写 SQL 语句这件事越来越多交给 NL2SQL 去做，而这些语句不管是谁写出来的，最后都落到同一个地方：
-> 数据库，整个应用都压着它的那个节点。所以数据库前面得有一道护栏：脚本也好、语句也好，先过一遍审核，
-> 再由一道闸门决定这条语句到底能不能跑。
->
-> 审脚本是 DBA 常年要干的一份活：量大，而且每个企业对「什么算问题」的标准都不一样。所以审核规则得
-> 能随时加、加的时候不用发版 —— 规则能用自然语言加进去，DBA 这份活就省事得多。
->
-> DBA 手上往往是一堆库，分给每个库的精力有限。那就给每个库配一个虚拟 DBA（AI AGENT）：你用自然语言
-> 跟它说话，让它按计划巡检、诊断这套库，盯住这套库自己的习性 —— 库越多，这件事越管用。
->
-> 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
-> 的问题、诊断一套活库。
->
-> 丢一份脚本或一条语句进去，它先列出会错在哪，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没
-> 有默认值的列、一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消。问它一个问题，
-> 它从你自己的运维手册里找答案，并把出处原文贴出来。连上活库，它读出库里现在有什么，也记下上一次
-> 读到了什么 —— 所以它懂的是**这一套**库，不是「库」这个东西。
->
-> 它读到活库上的每一条语句，都先过同一道闸门：只放只读语句、DDL 一律拒，「能不能跑」从不由模型说了算。
-> 还没走到闸门上的那几处，写在本篇后面的
-> [这一节](#what-it-will-do-to-your-database-and-what-it-will-not) 里。
-
 **Contents** — [Quick start](#quick-start) ·
 [What it will do to your database, and what it will not](#what-it-will-do-to-your-database-and-what-it-will-not) ·
 [Ask a question, or run a diagnosis](#ask-a-question-or-run-a-diagnosis) ·
@@ -62,11 +40,12 @@
 [Status](#status) · [Known limitations](#known-limitations) · [FAQ](#faq) ·
 [Why I built this](#why-i-built-this) · [Contributing](#contributing) · [License](#license)
 
-Docs: [quickstart](docs/quickstart.md) — offline, then a real database ·
-[architecture](docs/architecture.md) — how the pieces fit together ·
+Docs (Chinese): [quickstart](docs/quickstart.md) — offline, then a real database ·
+[architecture](docs/architecture.md) — which file does what ·
 [corpus](docs/corpus.md) — what to load, and how well it answers ·
 [bench](docs/bench.md) — the numbers, and how to reproduce them ·
-[roadmap](docs/roadmap.md) — what is built, and what is next
+[roadmap](docs/roadmap.md) — what is built, and what is next ·
+[overview](docs/README.md) — the same opening, in Chinese
 
 ## Quick start
 
@@ -117,15 +96,15 @@ flowchart LR
     A["the virtual DBA<br/>answers, inspects, remembers"]
 
     W --> R --> P
-    W -. "a statement you wrote cannot reach it yet (R15)" .-> F
-    R -. "its own live reads skip it (R13)" .-> D
+    W -. "a statement you wrote has no way in yet" .-> F
+    R -. "its own live reads skip it" .-> D
     Y --> A
     A -->|"its reads"| F
     F --> D
 ```
 
-Solid is what is wired today. Dotted is what is not, and the two gaps carry the same numbers
-the rest of this section uses.
+Solid is what is wired today. Dotted is the two gaps: both are listed under
+[Known limitations](#known-limitations), and work on them is on the [roadmap](docs/roadmap.md) (Chinese).
 
 Read-only is not a setting here, it is the shape of the thing. Every command below obeys three
 statements:
@@ -145,9 +124,9 @@ The diagnostic agent answers a question and reads an instance: the same agent, t
 notes, both ways of answering. It is the half allowed to be wrong, because a bad answer is bad
 advice rather than damaged data. What it has instead of a guarantee is a hit rate per question over
 44 of them — [`eval/report-dba.md`](eval/report-dba.md) — answered through
-`schemafence/knowledge.py` and `schemafence/agent.py`. Its two questions of record are *why is the
-orders table slow* and *what does `idle in transaction` cost us*; storage numbers under both backends
-are in [`docs/bench.md`](docs/bench.md).
+`schemafence/knowledge.py` and `schemafence/agent.py`. Two questions from the eval set — *why is the
+orders table slow* and *what does `idle in transaction` cost us* — show what that looks like; storage
+numbers under both backends are in [`docs/bench.md`](docs/bench.md) (Chinese).
 
 The reviewer and the fence take different things in, and that is the part worth knowing:
 
@@ -168,7 +147,7 @@ They are wired together in exactly one place, `Toolbox` in `schemafence/tools.py
 go into the answer text and no further, so a mediocre retrieval score is a quality problem, not a
 safety one. **What reaches that gate is narrower than what it is meant to cover** — the reviewer's
 own reads, and no way in for a statement you wrote (there is no `--sql`, no `--file`, and no service
-to call) — and both gaps are measured under [Known limitations](#known-limitations), as R13 and R15.
+to call) — and both gaps are measured under [Known limitations](#known-limitations).
 
 ## Ask a question, or run a diagnosis
 
@@ -214,7 +193,7 @@ your own. **Corpus shape decides retrieval quality more than size does:** the ha
 scores 100% top-5 over 50 questions while the full manual scores 82.5% over 40, and merging
 them costs the runbook questions 30 points while costing the syntax questions nothing. Sizes,
 the measured cost of merging (96.8% → 74.6% over 201 questions, 89.7% at `--k 20`) and the
-pgvector ingest shapes are in [`docs/corpus.md`](docs/corpus.md), along with the rules for notes
+pgvector ingest shapes are in [`docs/corpus.md`](docs/corpus.md) (Chinese), along with the rules for notes
 that cannot leave a company. `--eval`
 is a measuring stick, not a gate: 44 questions over 40 chunks come out at **97.7% top-5**
 offline, with the relevance floor named rather than guessed.
@@ -229,9 +208,9 @@ be answered against what earlier passes saw, and not only against what the catal
 That memory is what makes it the agent that knows **this** instance rather than instances in
 general.
 
-**None of that is built yet.** There is no diagnostic command, and nothing is persisted between
-runs. What exists is the raw material both would run on: the live read (`snapshot.py`) and the
-checks over a schema (`checks.py`). It is R12 in [`docs/roadmap.md`](docs/roadmap.md).
+**There is no diagnostic command yet**, and nothing is kept between runs. What the agent works with
+is the live read (`snapshot.py`) and the checks over a schema (`checks.py`); the pass that would tie
+them into one conclusion is on the [roadmap](docs/roadmap.md) (Chinese).
 
 ## Review a script, or a query
 
@@ -253,15 +232,15 @@ table, a lossy join key, a nullable column read as plain, two similarly named fi
 | 6 | **Runtime guardrails** | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 
 **Check 5** is the odd one: its subject is a **result** rather than a statement, so it needs a live
-connection today and is only partly wired up. It looks for a row count far outside what the joins and
-filters can allow, a breakdown that does not reconcile with its total, or a column that comes back
-mostly NULL. Its offline half — predicting what a result can and cannot look like from the schema and
-its statistics — is not written yet.
+connection. It looks for a row count far outside what the joins and filters can allow, a breakdown
+that does not reconcile with its total, or a column that comes back mostly NULL. The half that
+predicts what a result can and cannot look like from a schema and its statistics is not built; the
+[roadmap](docs/roadmap.md) (Chinese) carries it.
 
 Checks 1–4, S and the seven layers run with or without a database. The reviewer reads a script in two
 passes — the schema it leaves behind, and the actions it takes to get there — and its rules are
 files, so adding one does not mean editing the engine. Which rules exist, which checks are still
-missing, and what each of them needs is in [`docs/roadmap.md`](docs/roadmap.md).
+missing, and what each of them needs is in [`docs/roadmap.md`](docs/roadmap.md) (Chinese).
 
 ### Reviewing somebody else's script
 
@@ -369,8 +348,8 @@ that would never fire:
 That is the honest form of "this needs a fact the reader does not collect yet", and it points at
 the fact provider rather than at the rule file.
 
-The two `...` gaps are mine; everything else is the run above, verbatim. The exit code is the
-part that matters in a pipeline: **0** read and clean, **1** read and at least one rule fired,
+The two `...` gaps stand for lines left out of the output above. The exit code is the part that
+matters in a pipeline: **0** read and clean, **1** read and at least one rule fired,
 **2** could not review — a pack that failed its own examples, or a file where the reader
 recognised nothing at all. The third code exists so that "0 finding(s)" can never be printed
 over a file nobody understood.
@@ -420,19 +399,18 @@ table, the script holds the one about to be added, and neither knows both.
 python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql
 ```
 
-Where the *list* of spellings comes from is a third question, and the corpus is where it was
-answered: every way of writing an index or a key that the PostgreSQL manual documents — on the
-column, in the table body, as a named constraint, by `ALTER TABLE`, by `CREATE UNIQUE INDEX` —
-became a case in the test file, and the reader has to read all of them as one fact. Documentation
-produced **tests**; it never touches the execution path, because retrieval is probabilistic and
-this layer is not allowed to be. That division is the whole design, one level down: a fact has one
-shape, however it was written, and a rule names the shape.
+The list of spellings comes from the corpus: every way of writing an index or a key that the
+PostgreSQL manual documents — on the column, in the table body, as a named constraint, by
+`ALTER TABLE`, by `CREATE UNIQUE INDEX` — is a case in the test file, and the reader has to read all
+of them as one fact. Documentation produced **tests**; it never touches the execution path, because
+retrieval is probabilistic and this layer is not allowed to be. That division is the whole design,
+one level down: a fact has one shape, however it was written, and a rule names the shape.
 
-**Status of that read:** the `pg_index` query behind `--db` here is new and has not yet been run
-against a server — the last step in the VM quickstart. What is checked offline is the part that
-decides: the same eighteen fields are built from catalog rows and from a script, field for field,
-in `tests/qa_probe.py` M1, so a rule cannot tell which of the two it is reading. Run
-`python -m schemafence.review --db "$PG_DSN"` on the VM to close that gap.
+**What is checked offline about that read:** the same eighteen fields are built from catalog rows
+and from a script, field for field, in `tests/qa_probe.py` M1, so a rule cannot tell which of the
+two it is reading. The `pg_index` query itself needs a server to exercise:
+`python -m schemafence.review --db "$PG_DSN" --ddl release.sql`, against the instance the
+[quickstart](docs/quickstart.md) (Chinese) sets up.
 
 ### Using it as a library
 
@@ -440,7 +418,7 @@ Check S is the one worth explaining: `checks.py` reads the schema and never sees
 `guard.py` reads the statement and never sees a schema, and a fan-out or a cancelled `LEFT JOIN` is
 valid on both sides and only visible where the two meet. The module that reads both reports, and
 never decides whether anything runs; what it still abstains from is in
-[`docs/roadmap.md`](docs/roadmap.md). As a library:
+[`docs/roadmap.md`](docs/roadmap.md) (Chinese). As a library:
 
 ```python
 from schemafence import check_sql, guard, load_rulepack, parse_ddl, review_ddl
@@ -457,7 +435,7 @@ print(len(review_ddl([pack], open("colleague.sql").read()).findings))
 
 With a live database (optional): `bash scripts/setup_pg.sh` covers the `apt` and `dnf` families,
 then `python demo.py --db postgresql://…/fence_demo` — step by step in the
-[Oracle Linux 10 VM or Cloud Studio](docs/quickstart.md) walkthrough. A question the agent refuses:
+[Oracle Linux 10 VM or Cloud Studio](docs/quickstart.md) (Chinese) walkthrough. A question the agent refuses:
 
 ```
 [ask] 帮我删掉 orders 这张表
@@ -475,7 +453,7 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 | Database | PostgreSQL, only for `--db`. The vector store needs `pgvector` and its HNSW index |
 | Embedding and chat | no SDK. Both are plain HTTPS calls made with `urllib`, so switching provider is an environment variable: `SF_EMBED_API_KEY`, `SF_LLM_API_KEY`, and their `_BASE_URL` / `_MODEL` partners. Anything OpenAI-compatible works |
 | Network | not needed. The offline path, the selftests and the rule packs make no request |
-| OS | anywhere Python runs. CI is `ubuntu-latest`; the two walkthroughs are [Oracle Linux 10 and Cloud Studio](docs/quickstart.md) |
+| OS | anywhere Python runs. CI is `ubuntu-latest`; the two walkthroughs are [Oracle Linux 10 and Cloud Studio](docs/quickstart.md) (Chinese) |
 
 ```bash
 git clone https://github.com/empoGavin/schemafence && cd schemafence
@@ -483,22 +461,23 @@ python demo.py                     # offline path: nothing to install, no key, n
 pip install -r requirements.txt    # only when you are about to use --db
 ```
 
-When a step fails, the [quickstart](docs/quickstart.md) ends with a troubleshooting table keyed by
+When a step fails, the [quickstart](docs/quickstart.md) (Chinese) ends with a troubleshooting table keyed by
 the error text you saw — `could not connect`, `ModuleNotFoundError: No module named 'psycopg'`,
 `pgvector = NOT INSTALLED`.
 
 ## Status
 
-**Early, and unreleased — there is no tag yet; `__version__` is `0.1.0`.** The offline path runs
-end to end; live mode is partly wired up.
+**Early, and unreleased — there is no tag yet; `__version__` is `0.1.0`.** In this version the
+offline path runs end to end; live mode covers part of what it is meant to. Everything under "not
+built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
 
 | | Built | Not built |
 | --- | --- | --- |
-| **Review a script** | change actions read as actions (16 kinds), 9 rules in three packs, every pack verified against its own examples on load, `--infer` from a description and two scripts | rules over a statement rather than a schema (R8) |
-| **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the offline half of result plausibility (check 5) |
-| **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs (R12) |
-| **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes (R13), and a front door for a statement you wrote (R11) |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 136 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
+| **Review a script** | change actions read as actions (16 kinds), 9 rules in three packs, every pack verified against its own examples on load, `--infer` from a description and two scripts | rules over a statement rather than a schema |
+| **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the reading of a result that would say a number is off |
+| **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs |
+| **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes, and a front door for a statement you wrote |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 138 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 ## Known limitations
 
@@ -506,9 +485,9 @@ end to end; live mode is partly wired up.
   one column definition per line, reads a closed set of statement kinds, and copies a
   dollar-quoted body whole without parsing it: every statement it does not claim is listed by
   position, and a file where it claims nothing exits 2 from the review command rather than
-  reporting zero findings. The schema audit is the exception and it is R10 in
-  [`docs/roadmap.md`](docs/roadmap.md): `python demo.py --source` prints `0 finding(s)` over the
-  same file, which is the same failure one command over. The SQL-side checks read a single
+  reporting zero findings. The schema audit is the exception: `python demo.py --source` prints
+  `0 finding(s)` over the same file, which is the same failure one command over, and the fix is on
+  the [roadmap](docs/roadmap.md) (Chinese). The SQL-side checks read a single
   query level and abstain, with a note, on anything nested, unparsable or ambiguous. Production
   should parse with `sqlglot` or `pg_query`; it is dependency-free on purpose, so
   `python demo.py` runs on a fresh clone with no install.
@@ -518,7 +497,8 @@ end to end; live mode is partly wired up.
 - **A rule file configures the reviewer, not the fence.** What a pack may change is the layer
   that reads and reports. The seven guardrail layers decide, and they stay code: a fence a committed
   JSON can switch off is not a fence. Its table whitelist and row cap are configuration, its
-  decision logic is not — R7 in [`docs/roadmap.md`](docs/roadmap.md).
+  decision logic is not. The [roadmap](docs/roadmap.md) (Chinese) keeps that as a requirement
+  rather than a setting.
 - **The eval harness is a ruler under revision.** Each question accepts a set of sources (`甲 / 乙`),
   but it is still one rank against that set, so read the per-question table before the headline.
 - **Corpora are searched one directory at a time.** IDF is computed over the corpus that was
@@ -539,7 +519,8 @@ end to end; live mode is partly wired up.
   as a column alias, so they cannot pass at all; and L6 matches `LIMIT` anywhere in the text, so an
   inner `LIMIT` exempts a statement from the outer cap, and three of them would be silently cut to
   100 rows. A catalog read that returns 100 of 300 indexes reports no duplicate index — which is
-  worse than reporting nothing. It is R13 in [`docs/roadmap.md`](docs/roadmap.md).
+  worse than reporting nothing. Making every live read pass the one gate is on the
+  [roadmap](docs/roadmap.md) (Chinese).
 
 ## FAQ
 
@@ -548,7 +529,7 @@ Check the exit code first. `python -m schemafence.review` exits **0** when it re
 nothing fired, **1** when something fired, and **2** when it could not review — a pack that failed
 its own examples, or a file where the reader recognised nothing at all. The schema audit is the
 exception: `python demo.py --source <file>` still prints `0 finding(s)` over a file it read nothing
-of. That one is R10 in [`docs/roadmap.md`](docs/roadmap.md) and is not fixed yet.
+of. That one is on the [roadmap](docs/roadmap.md) (Chinese) and is not fixed yet.
 
 **A rule pack says `WAS NOT APPLIED`. Why?**
 The pack names the facts it needs, and a run that did not read them is refused rather than reported

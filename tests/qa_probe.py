@@ -1204,11 +1204,82 @@ def _null_fraction(sql_text: str, table: str, column: str) -> float | None:
     return nulls / len(rows)
 
 
+# Wording that talks to the author instead of to the reader. Every entry was in
+# a shipped doc once: a note about the author's own machine, an unfinished check
+# reported back to whoever asked for it, an errand. They are retired here the way
+# N2 retires the slogans, so a rewrite cannot quietly bring them back.
+_NOTES_TO_THE_AUTHOR = {
+    "开发机": "the author's machine, standing in for a description of yours",
+    "上一轮": "refers to a development run the reader never saw",
+    "我记得": "a first-person recollection of one setup",
+    "没有量过": "reports back what has not been measured yet",
+    "值得重跑一遍": "an errand left for the author",
+    "踩过一次": "turns one development incident into prose",
+    "把结果带回来": "an instruction to whoever runs the benchmark",
+    "你在虚拟机里试一次": "tells one person what to do, instead of how it works",
+    "待 vm 补跑": "an internal to-do written as prose",
+    "has not yet been run against a server": "reports an unfinished check",
+    "the two `...` gaps are mine": "a note about one paste, not about the tool",
+    "questions of record": "names questions only the author has settled on",
+}
+
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _prose_lines(text: str) -> list:
+    """The lines a reader reads, with fenced blocks and inline code taken out.
+
+    Line numbers are kept, so a fault can name the line that carries it. Inline
+    code comes out because it is data — a Chinese question handed to `--ask`,
+    the word a router test greps for — not the language the doc is written in.
+    """
+    out, inside = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            out.append("")
+            continue
+        out.append("" if inside else re.sub(r"`[^`]*`", "", line))
+    return out
+
+
+def _language_faults(readme_text: str, doc_texts: dict) -> list:
+    """One language per side: the README in English, docs/ in Chinese.
+
+    The README carried its opening twice, once per language, and docs/ was split
+    between the two. Both readings shipped. This keeps the split from returning.
+    """
+    faults = [f"README.md line {i} is not English: {line.strip()[:52]!r}"
+              for i, line in enumerate(_prose_lines(readme_text), 1) if _CJK.search(line)]
+    faults += [f"{name} carries no Chinese prose"
+               for name, text in sorted(doc_texts.items())
+               if not _CJK.search("\n".join(_prose_lines(text)))]
+    return faults
+
+
+def _chatter_faults(doc_texts: dict) -> list:
+    """Docs that talk to the author rather than to the reader, sorted.
+
+    A bare requirement number counts as chatter anywhere but the roadmap: a
+    reader who has not read the ledger cannot follow it, and the gap it names
+    is spelled out in words instead.
+    """
+    faults = {f"{name} — {phrase!r}: {why}"
+              for name, text in doc_texts.items()
+              for phrase, why in _NOTES_TO_THE_AUTHOR.items()
+              if phrase in text.lower()}
+    faults |= {f"{name} — quotes the bare requirement number {r}"
+               for name, text in doc_texts.items()
+               if not name.endswith("roadmap.md")
+               for r in sorted(set(re.findall(r"\bR\d+\b", text)))}
+    return sorted(faults)
+
+
 _DIAGRAM_KINDS = ("flowchart", "graph", "sequenceDiagram", "stateDiagram-v2",
                   "erDiagram", "classDiagram", "journey", "gantt", "pie")
 
 
-def _diagram_faults(text: str, section_ids: set, roadmap_ids: set) -> list:
+def _diagram_faults(text: str) -> list:
     """Faults in the one mermaid diagram the README carries, [] when sound.
 
     Runs on synthetic text as well as on the README: the N7 case proves this
@@ -1233,12 +1304,18 @@ def _diagram_faults(text: str, section_ids: set, roadmap_ids: set) -> list:
             faults.append(f"does not name {name!r}")
     if "virtual DBA" not in body and "diagnostic agent" not in body:
         faults.append("does not name the agent")
-    ids = set(re.findall(r"\bR\d+\b", body))
-    if ids != section_ids:
-        faults.append(f"quotes {sorted(ids)}; its section quotes {sorted(section_ids)}")
-    dangling = sorted(ids - roadmap_ids)
-    if dangling:
-        faults.append(f"quotes {dangling}, which roadmap.md does not define")
+    # A bare requirement number means nothing to a reader who has not read
+    # roadmap.md, and it is how the diagram once drew a path the README itself
+    # says is not wired. The two gaps are named on the dashed edges instead, so
+    # both dashed edges have to be there, and the diagram stays in English.
+    ids = sorted(set(re.findall(r"\bR\d+\b", body)))
+    if ids:
+        faults.append(f"quotes the bare requirement numbers {ids}")
+    dashed = re.findall(r'-\.\s*"([^"]*)"\s*\.->', body)
+    if len(dashed) != 2:
+        faults.append(f"carries {len(dashed)} dashed edge(s), expected the two gaps")
+    if _CJK.search(body):
+        faults.append("the diagram is not in English")
     return faults
 
 
@@ -1249,8 +1326,9 @@ def doc_cases() -> None:
     to a file a merge renamed, wording the rewrite retired but left behind in a
     second doc, a NULL fraction copied forward from an older sample, a version
     the README quotes while the package defines another, a Contents block
-    that listed subsections among the sections while leaving sections out, and a
-    diagram that can silently claim a path the README itself says is not wired.
+    that listed subsections among the sections while leaving sections out, a
+    diagram that can silently claim a path the README itself says is not wired,
+    and two languages inside one set of docs.
     """
     docs = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     link = re.compile(r"\]\(([^)\s]+)\)")
@@ -1286,9 +1364,13 @@ def doc_cases() -> None:
     check("N2", "no doc still carries wording this project retired", not stale,
           "; ".join(stale[:4]))
 
-    lead = (ROOT / "README.md").read_text(encoding="utf-8").split("**Contents**")[0]
-    first_cjk = re.search(r"[\u4e00-\u9fff]", lead)
-    en_lead, zh_lead = lead[:first_cjk.start()], lead[first_cjk.start():]
+    # The three reasons are still stated, but no longer twice in one file: the
+    # README opens in English and docs/README.md carries the Chinese opening.
+    # The repeat was part of what made the docs read as two projects.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    en_lead = readme.split("**Contents**")[0].lower()
+    overview = ROOT / "docs" / "README.md"
+    zh_lead = overview.read_text(encoding="utf-8").lower() if overview.exists() else ""
     points = [
         ("why the database needs a fence", "nl2sql", "nl2sql"),
         ("why a rule can be added without a release", "plain words", "自然语言"),
@@ -1296,12 +1378,16 @@ def doc_cases() -> None:
     ]
     absent = [f"{what} ({side} half)"
               for what, en_mark, zh_mark in points
-              for side, text, mark in (("English", en_lead.lower(), en_mark),
-                                       ("Chinese", zh_lead.lower(), zh_mark))
+              for side, text, mark in (("English", en_lead, en_mark),
+                                       ("Chinese", zh_lead, zh_mark))
               if mark not in text]
-    check("N5", "the opening still says why each of the three parts exists, in both halves",
+    if not overview.exists():
+        absent.append("docs/README.md, which carries the Chinese opening, is missing")
+    check("N5", "the three parts each still say why they exist: the README in English, "
+                "the overview in docs/ in Chinese",
           not absent,
-          "; ".join(absent) if absent else "fence, rules and the agent, in both halves")
+          "; ".join(absent) if absent
+          else "fence, rules and the agent, in English and in Chinese")
 
     # N6 exists because N1 cannot see this: it skips every anchor, and the
     # Contents block is nothing but anchors. It had drifted twice — listing two
@@ -1329,24 +1415,25 @@ def doc_cases() -> None:
     # when the syntax breaks, and nothing else stops it from quietly drawing a
     # path the README itself says does not exist yet — the same overclaim the
     # fence's all-statement sentence made once and had to retire.
-    roadmap_ids = set(re.findall(r"\bR\d+\b", (ROOT / "docs" / "roadmap.md").read_text(encoding="utf-8")))
-    section = readme.split("## What it will do", 1)[1].split("\n## ", 1)[0]
-    section_ids = set(re.findall(r"\bR\d+\b", section))
     broken_samples = [
         "no diagram here at all",
         "```mermaid\nflowchart LR\n    W[\"review and the fence\"\n```\n",
         "```mermaid\nwaterfall LR\n    W[\"review, the fence, the virtual DBA\"]\n```\n",
         "```mermaid\nflowchart LR\n    W[\"review, the fence, the virtual DBA\"]\n```\n",
-        "```mermaid\nflowchart LR\n    W[\"review, the fence, the virtual DBA, R99\"]\n```\n",
+        "```mermaid\nflowchart LR\n    W[\"review, the fence, the virtual DBA\"]\n"
+        "    W -. \"no way in yet (R15)\" .-> F\n    W -. \"skipped (R13)\" .-> D\n```\n",
+        "```mermaid\nflowchart LR\n    W[\"review, the fence, the virtual DBA\"]\n"
+        "    W -. \"no way in yet\" .-> F\n```\n",
+        "```mermaid\nflowchart LR\n    W[\"复审与闸门，虚拟 DBA\"]\n"
+        "    W -. \"进不来\" .-> F\n    W -. \"跳过\" .-> D\n```\n",
     ]
-    toothless = [i for i, sample in enumerate(broken_samples)
-                 if not _diagram_faults(sample, section_ids, roadmap_ids)]
-    faults = _diagram_faults(readme, section_ids, roadmap_ids)
+    toothless = [i for i, sample in enumerate(broken_samples) if not _diagram_faults(sample)]
+    faults = _diagram_faults(readme)
     trouble = [f"the gate itself missed broken sample {i}" for i in toothless] + faults
-    check("N7", "the one diagram the README carries is sound: well formed, names the three "
-                "parts, and quotes only the gaps its section quotes",
+    check("N7", "the one diagram the README carries is sound: well formed, in English, names "
+                "the three parts, and carries the two gaps as dashed edges rather than numbers",
           not trouble,
-          "; ".join(trouble[:5]) if trouble else "one diagram, well formed, R13 and R15 marked")
+          "; ".join(trouble[:5]) if trouble else "one diagram, well formed, two dashed edges")
 
     sample = (ROOT / "examples" / "sample_schema.sql").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
@@ -1368,6 +1455,44 @@ def doc_cases() -> None:
           quoted is not None and quoted.group(1) == shipped,
           f"README says {quoted.group(1) if quoted else 'nothing'}, "
           f"schemafence.__version__ is {shipped}")
+
+    # N8 and N9 keep one documentation pass from undoing the next: pages that
+    # talk to the author, and two languages in one set of docs. Both follow N7's
+    # rule — the gate is fed broken samples, not the file it is checking.
+    doc_texts = {d.relative_to(ROOT).as_posix(): d.read_text(encoding="utf-8")
+                 for d in docs}
+    chatter = _chatter_faults(doc_texts)
+    chatter_samples = [
+        ("a note about the author's machine", {**doc_texts, "x.md": "开发机没有这个视图"}, True),
+        ("a first-person recollection", {**doc_texts, "x.md": "我记得当时的配置"}, True),
+        ("the docs as they are", doc_texts, False),
+    ]
+    toothless = []
+    for name, texts, expect_fault in chatter_samples:
+        faulted = bool(_chatter_faults(texts))
+        if faulted != expect_fault:
+            toothless.append(f"sample {name!r}: expected {expect_fault}, got {faulted}")
+    trouble = toothless + chatter
+    check("N8", "no doc talks to the author instead of to the reader: no note about the "
+                "author's machine, no unfinished check, no errand",
+          not trouble, "; ".join(trouble[:4]) if trouble else "no notes to the author")
+
+    docs_only = {name: text for name, text in doc_texts.items() if name != "README.md"}
+    language = _language_faults(readme, docs_only)
+    language_samples = [
+        ("a Chinese paragraph in the README", "> 中文引言\n", {"x.md": "中文\n"}, True),
+        ("an all-English doc under docs/", "# English\n", {"x.md": "# English\n"}, True),
+        ("one language per side", "# English\n", {"x.md": "中文\n"}, False),
+    ]
+    toothless = []
+    for name, readme_sample, docs_sample, expect_fault in language_samples:
+        faulted = bool(_language_faults(readme_sample, docs_sample))
+        if faulted != expect_fault:
+            toothless.append(f"sample {name!r}: expected {expect_fault}, got {faulted}")
+    trouble = toothless + language
+    check("N9", "the README is written in English and every doc under docs/ is written in "
+                "Chinese, code blocks and example data aside",
+          not trouble, "; ".join(trouble[:4]) if trouble else "one language per side")
 
 
 def main() -> int:
