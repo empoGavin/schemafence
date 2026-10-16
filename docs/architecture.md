@@ -18,7 +18,7 @@ question this file exists to answer.
 | Answer a question your runbook has the answer to | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
 | Diagnose a live instance | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
 | Run everything offline, no database and no key | `python demo.py` | all of the above except the live reads |
-| The regression gate | `python tests/qa_probe.py` | 135 cases |
+| The regression gate | `python tests/qa_probe.py` | 136 cases |
 | Check a query for the number it gets wrong | **no command yet** — R11 | would be `checks_sql.py` |
 | Hand the gate a statement of your own | **no command yet** — R15 | would be `guard.py` |
 | Run a diagnosis, and keep what it found | **no command yet** — R12 | would be `snapshot.py` → `checks.py` → a store of past runs |
@@ -58,7 +58,7 @@ Front doors and harness:
 | --- | --- |
 | `demo.py` | Audits a schema and runs the selftests. Offline by default, `--db` to add the live read. |
 | `agent_cli.py` | `--ingest`, `--ask`, `--eval`, `--tune`, `--genq`, `--report`. |
-| `tests/qa_probe.py` | 135 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
+| `tests/qa_probe.py` | 136 offline cases, including the merge gates that keep a rule pack from growing by accident, and the doc checks that keep a quoted number honest. |
 | `scripts/` | Corpus converters, the pgvector ingest, the benchmark trio and its report generator, `setup_pg.sh`, `test_layers.py`. |
 | `rules/` | Three shipped rule packs: `table-hygiene`, `change-review`, `index-hygiene`. |
 

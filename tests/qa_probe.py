@@ -1204,14 +1204,53 @@ def _null_fraction(sql_text: str, table: str, column: str) -> float | None:
     return nulls / len(rows)
 
 
+_DIAGRAM_KINDS = ("flowchart", "graph", "sequenceDiagram", "stateDiagram-v2",
+                  "erDiagram", "classDiagram", "journey", "gantt", "pie")
+
+
+def _diagram_faults(text: str, section_ids: set, roadmap_ids: set) -> list:
+    """Faults in the one mermaid diagram the README carries, [] when sound.
+
+    Runs on synthetic text as well as on the README: the N7 case proves this
+    gate can fail by feeding it broken diagrams, not by editing the README
+    into a broken state and hoping to restore it.
+    """
+    blocks = re.findall(r"^```mermaid[ \t]*\r?\n(.*?)^```[ \t]*\r?$", text, re.M | re.S)
+    if len(blocks) != 1:
+        return [f"carries {len(blocks)} mermaid blocks, expected one"]
+    body = blocks[0]
+    faults = []
+    lines = [line for line in body.splitlines() if line.strip()]
+    if not re.match(r"^(" + "|".join(_DIAGRAM_KINDS) + r")\b", lines[0].strip()):
+        faults.append(f"first line {lines[0].strip()!r} does not declare a diagram kind")
+    for line in lines:
+        if line.count("[") != line.count("]") or line.count("(") != line.count(")"):
+            faults.append(f"unbalanced brackets: {line.strip()[:44]!r}")
+        if line.count('"') % 2:
+            faults.append(f"odd number of quotes: {line.strip()[:44]!r}")
+    for name in ("review", "fence"):
+        if name not in body:
+            faults.append(f"does not name {name!r}")
+    if "virtual DBA" not in body and "diagnostic agent" not in body:
+        faults.append("does not name the agent")
+    ids = set(re.findall(r"\bR\d+\b", body))
+    if ids != section_ids:
+        faults.append(f"quotes {sorted(ids)}; its section quotes {sorted(section_ids)}")
+    dangling = sorted(ids - roadmap_ids)
+    if dangling:
+        faults.append(f"quotes {dangling}, which roadmap.md does not define")
+    return faults
+
+
 def doc_cases() -> None:
     """The outward-facing docs quote numbers and point at files; both go stale in silence.
 
     Every case here has already gone wrong once or is one edit away from it: a link
     to a file a merge renamed, wording the rewrite retired but left behind in a
     second doc, a NULL fraction copied forward from an older sample, a version
-    the README quotes while the package defines another, and a Contents block
-    that listed subsections among the sections while leaving sections out.
+    the README quotes while the package defines another, a Contents block
+    that listed subsections among the sections while leaving sections out, and a
+    diagram that can silently claim a path the README itself says is not wired.
     """
     docs = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     link = re.compile(r"\]\(([^)\s]+)\)")
@@ -1284,6 +1323,30 @@ def doc_cases() -> None:
     check("N6", "every in-page anchor resolves and Contents lists the sections, and nothing deeper",
           not trouble,
           "; ".join(trouble[:5]) if trouble else f"{len(top)} sections, all listed")
+
+    # A diagram is the one part of the README no other gate reads: N1 skips it
+    # (it is not a link), N2 sees only its words. It renders as an error box
+    # when the syntax breaks, and nothing else stops it from quietly drawing a
+    # path the README itself says does not exist yet — the same overclaim the
+    # fence's all-statement sentence made once and had to retire.
+    roadmap_ids = set(re.findall(r"\bR\d+\b", (ROOT / "docs" / "roadmap.md").read_text(encoding="utf-8")))
+    section = readme.split("## What it will do", 1)[1].split("\n## ", 1)[0]
+    section_ids = set(re.findall(r"\bR\d+\b", section))
+    broken_samples = [
+        "no diagram here at all",
+        "```mermaid\nflowchart LR\n    W[\"review and the fence\"\n```\n",
+        "```mermaid\nwaterfall LR\n    W[\"review, the fence, the virtual DBA\"]\n```\n",
+        "```mermaid\nflowchart LR\n    W[\"review, the fence, the virtual DBA\"]\n```\n",
+        "```mermaid\nflowchart LR\n    W[\"review, the fence, the virtual DBA, R99\"]\n```\n",
+    ]
+    toothless = [i for i, sample in enumerate(broken_samples)
+                 if not _diagram_faults(sample, section_ids, roadmap_ids)]
+    faults = _diagram_faults(readme, section_ids, roadmap_ids)
+    trouble = [f"the gate itself missed broken sample {i}" for i in toothless] + faults
+    check("N7", "the one diagram the README carries is sound: well formed, names the three "
+                "parts, and quotes only the gaps its section quotes",
+          not trouble,
+          "; ".join(trouble[:5]) if trouble else "one diagram, well formed, R13 and R15 marked")
 
     sample = (ROOT / "examples" / "sample_schema.sql").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")

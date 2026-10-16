@@ -106,6 +106,27 @@ python -m schemafence.review --rules rules/table-hygiene.json \
 The project has three parts: **review** a script or a statement, a **diagnostic agent** that
 reads an instance and remembers what it saw, and **the fence** that decides what may run.
 
+```mermaid
+flowchart LR
+    W["a script or a statement<br/>written by NL2SQL, by hand,<br/>an ORM or a migration tool"]
+    R["review<br/>reads it and runs nothing"]
+    P["findings, each with a why and a fix<br/>a person decides"]
+    F["the fence: guard()<br/>read-only passes, DDL is refused"]
+    D[("your live instance")]
+    Y["you, in plain words"]
+    A["the virtual DBA<br/>answers, inspects, remembers"]
+
+    W --> R --> P
+    W -. "a statement you wrote cannot reach it yet (R15)" .-> F
+    R -. "its own live reads skip it (R13)" .-> D
+    Y --> A
+    A -->|"its reads"| F
+    F --> D
+```
+
+Solid is what is wired today. Dotted is what is not, and the two gaps carry the same numbers
+the rest of this section uses.
+
 Read-only is not a setting here, it is the shape of the thing. Every command below obeys three
 statements:
 
@@ -477,7 +498,7 @@ end to end; live mode is partly wired up.
 | **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the offline half of result plausibility (check 5) |
 | **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs (R12) |
 | **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes (R13), and a front door for a statement you wrote (R11) |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 135 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 136 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 ## Known limitations
 
