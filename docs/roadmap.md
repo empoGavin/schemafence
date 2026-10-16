@@ -117,7 +117,7 @@ test a definition when it changes.
 
 ## Requested, and where each one lands
 
-Six things were asked for that the tables above do not yet cover, and three more
+Six things were asked for that the tables above do not yet cover, and four more
 came out of reviewing the code against them. Each one reads and reports. None of
 them executes, so none of them changes what this project is.
 
@@ -133,6 +133,7 @@ them executes, so none of them changes what this project is.
 | **R8** | a rule over the statement, not only over the schema | a SQL fact model | `checks_sql.py` has the facts it needs (the FROM chain, join keys, uniqueness) but does not expose them as rows, so every rule written so far reads DDL. |
 | **R9** | a rule that needs what the database already holds | a `catalog` fact model, `pg_index` | **done** — `rules/index-hygiene.json` refuses a script and asks for `--db`; the row shape is held identical to the script reader's by `tests/qa_probe.py` M1. The query itself has not been run against a server yet. |
 | **R10** | the schema audit says when it read nothing, not only the reviewer | `demo.py`, `checks.py` | not done — checks 1 to H are functions of a schema, so a file with no tables in it yields `0 finding(s)` and exit 0 with nothing said. A script holding only `\copy … from 'x.csv'` and `VACUUM FULL;` reproduces it, and the same file through `python -m schemafence.review` exits 2. |
+| **R11** | a query to check, the way a script can be checked | `schemafence/review.py` | not done — `checks_sql.py` has no command line. `demo.py` runs its checks as a selftest and the library exposes `check_sql`, so one of the four jobs on the desk has no front door: you cannot hand it your own query and be handed a report. Found while writing `docs/architecture.md`, which has to say so. |
 
 R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
 live connection is not a write connection, which is why the `--db` axis has

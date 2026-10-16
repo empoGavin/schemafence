@@ -17,8 +17,8 @@ deliberately not wired to each other. To run the thing instead, see [`quickstart
 **One gap worth naming:** the statement checks (S1 and S3, "a measure summed after a one-to-many
 join", "a `LEFT JOIN` cancelled by a `WHERE`") have **no command-line entry** — there is no
 `--sql`. `demo.py` runs them as a selftest and the library exposes `check_sql`, but you cannot hand
-it your own query and get a report back. It is on the roadmap; nothing else about that job is
-missing.
+it your own query and get a report back. That is R11 in [`roadmap.md`](roadmap.md); nothing else
+about that job is missing.
 
 ## The modules
 
