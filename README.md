@@ -5,45 +5,57 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![dependencies](https://img.shields.io/badge/dependencies-one%2C%20and%20only%20for%20--db-brightgreen)](requirements.txt)
 
+> **AI × DBA.** AI writes the statements and it writes the diagnosis. What catches both is DBA
+> judgement — the checks that review a script or a statement, the fence that decides whether one
+> may run, and the criteria a diagnosis is held to.
+>
 > Four things a DBA has on their desk: a script to review, a query somebody says is returning the
 > wrong number, a question you would otherwise go to the runbook for, and a live instance to
 > diagnose.
 >
 > Hand it the script and it lists the problems in it before anybody runs it: a table dropped, a
 > column added `NOT NULL` with no default, an index the table already carries under another name.
-> Hand it the query and it lists what the query will get wrong while the database reports no error
-> at all: a measure summed after a one-to-many join, a `LEFT JOIN` cancelled by a `WHERE`, a join
-> key that is nullable. Ask the question and it answers from the runbook, quoting the note it read.
-> Point it at a live instance and it reads what is there now: which tables, and which indexes those
-> tables already carry. An index the script is about to add and an index the catalog already has
-> are the same fact, so it can tell you the table already carries it.
+> Hand it the statement and it lists what the statement will get wrong while the database reports
+> no error at all: a measure summed after a one-to-many join, a `LEFT JOIN` cancelled by a `WHERE`,
+> a join key that is nullable — and, where there is a result to look at, whether that result is
+> plausible. Ask the question and it answers from the runbook, quoting the note it read.
+> Point it at a live instance and it reads what is there now and keeps what it saw: which tables,
+> which indexes those tables already carry, and what earlier passes found — so it is the agent that
+> knows *this* instance, rather than instances in general.
 >
-> Every statement the agent runs passes one fence first, that fence is read-only, and no model
-> decides whether a statement may run.
+> People use NL2SQL to write statements. Those statements are what gets reviewed here. That is this
+> project's answer to what AI does to a database.
+>
+> Every statement that runs against a live database passes one fence first, that fence is
+> read-only, and no model decides whether a statement may run.
 >
 > A review rule is added by description: say what you want checked in plain words, give two
 > examples, and it is a rule you can use. No code change, no model when the rule runs, and the
 > rule has to pass its own examples first.
 >
 > 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
-> 的问题、诊断一套活库。
+> 的问题、诊断一套活库 —— **AI × DBA**：AI 写语句、出诊断，接住它们的是 DBA 的判断力，落在检查里、
+> 闸门里、以及诊断所依据的判据里。
 >
 > 把脚本丢进去，它先列出这脚本会有什么问题，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有
-> 默认值的列、表上其实早就有个同列同序的索引，只是名字不同。把查询丢进去，它列出这条语句会错在哪，
+> 默认值的列、表上其实早就有个同列同序的索引，只是名字不同。把语句丢进去，它列出这条语句会错在哪，
 > 而数据库一句错都不报：一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消、连接键
-> 本身可空。问题问它，它从你自己的运维手册里找答案，并把出处原文贴出来。
-> 连上活库，它先读出库里现在有什么：哪些表，表上已经挂着哪些索引——脚本马上要加的索引和库里早就
-> 有的索引是同一种事实，所以它反过来会告诉你「这张表上已经有了」。
+> 本身可空 —— 还有，拿到结果之后，这个结果本身可不可信。问题问它，它从你自己的运维手册里找答案，
+> 并把出处原文贴出来。连上活库，它读出库里现在有什么，也记下上一次读到了什么：哪些表，表上已经
+> 挂着哪些索引，前几轮查出了什么 —— 所以它懂的是**这一套**库，不是「库」这个东西。
 >
-> 助手执行的每条语句先过同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
+> 别人用 NL2SQL 生成语句，这些语句就是拿到这里来审的。这是本项目对「AI 进入数据库」的回应。
+>
+> 执行到活库上的每条语句先过同一道闸门，闸门只放只读语句，「能不能跑」从不由模型说了算。
 >
 > 脚本审核的规则能自己加：用自然语言说清你要审什么、再给两个例子，它就是一条能用的规则，不用改
 > 代码。用规则时不过模型，规则本身先过自己的用例门禁。
 
 **Contents** — [Quick start](#quick-start) ·
 [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) ·
-[Ask it a question](#ask-it-a-question) · [Review a script](#review-a-script-or-a-query) ·
-[Add a rule by describing it](#add-a-rule-by-describing-it) ·
+[Ask a question, or run a diagnosis](#ask-a-question-or-run-a-diagnosis) ·
+[Review a script](#review-a-script-or-a-query) ·
+[From your examples to a rule](#from-your-examples-to-a-rule) ·
 [A rule that needs the live database](#a-rule-that-needs-the-live-database) ·
 [Environment](#environment) · [Status](#status) · [Known limitations](#known-limitations) ·
 [FAQ](#faq) · [Contributing](#contributing)
@@ -89,15 +101,19 @@ python -m schemafence.review --rules rules/table-hygiene.json \
 
 ## What it will do to your database, and what it will not
 
+The project has three parts: **review** a script or a statement, a **diagnostic agent** that
+reads an instance and remembers what it saw, and **the fence** that decides what may run.
+
 Read-only is not a setting here, it is the shape of the thing. Every command below obeys three
 statements:
 
 - **A review runs nothing.** The reviewer reads a schema, a script, or a query, and prints
   findings. It opens no transaction, so a script full of `DROP` and `ALTER` is a normal input
   rather than something it has to be trusted with.
-- **Anything that executes goes through one gate.** The agent's four tools all pass `guard()`,
-  which lets read-only statements through, refuses DDL, and writes every call to
-  `agent_trace.jsonl` with the decision, the layer and the duration.
+- **Anything that runs against a live database goes through one gate.** `guard()` is the one
+  place a statement is allowed to reach a database: it lets read-only statements through, refuses
+  DDL, and writes every call to `agent_trace.jsonl` with the decision, the layer and the
+  duration. The agent's tools pass it today; what does not yet is named further down.
 - **No model decides whether a statement may run.** The checks and the gate are fixed code, and
   retrieved text goes into the answer and no further.
 
@@ -123,11 +139,19 @@ goes to the reviewer, the report goes to a person, and the person decides — th
 a gap in it. A person, a migration tool and a model all write these scripts, and the reviewer does
 not care which of them it is.
 
-The two gates meet in one place, `Toolbox` in `schemafence/tools.py`: retrieved passages go into
-the answer text and no further, so a mediocre retrieval score is a quality problem, not a safety
-one.
+The reviewer and the fence meet in one place, `Toolbox` in `schemafence/tools.py`: retrieved
+passages go into the answer text and no further, so a mediocre retrieval score is a quality
+problem, not a safety one.
 
-## Ask it a question
+**What actually reaches that gate is narrower than what it is meant to cover.** Three calls from
+`Toolbox` pass it; the reviewer's own reads against a live database go straight to psycopg, because
+those statements are constants in `snapshot.py` (R13). And there is no way to hand it a statement *you*
+wrote: no `--sql`, no `--file`, and no service to call. That is R15 in
+[`docs/roadmap.md`](docs/roadmap.md), and together with the reviewer's own reads it is the whole of
+the difference between "every statement that reaches a live database goes through here" and that
+sentence being true.
+
+## Ask a question, or run a diagnosis
 
 `demo.py` audits a schema. `agent_cli.py` answers questions against one, choosing
 between the knowledge base and the live catalogue.
@@ -176,6 +200,20 @@ that cannot leave a company. `--eval`
 is a measuring stick, not a gate: 44 questions over 40 chunks come out at **97.7% top-5**
 offline, with the relevance floor named rather than guessed.
 
+### Diagnostic runs, and what the agent remembers
+
+The same agent is meant to run a **diagnosis**: walk a set of checks over one instance in a single
+pass, print what it looked at and what came back, and say what the findings add up to — each
+conclusion traceable to the note, the case, or the procedure it came from. Running it repeatedly is
+also what gives the agent a memory of *this* instance: every pass is kept, so a later question can
+be answered against what earlier passes saw, and not only against what the catalog holds right now.
+That memory is what makes it the agent that knows **this** instance rather than instances in
+general.
+
+**None of that is built yet.** There is no diagnostic command, and nothing is persisted between
+runs. What exists is the raw material both would run on: the live read (`snapshot.py`) and the
+checks over a schema (`checks.py`). It is R12 in [`docs/roadmap.md`](docs/roadmap.md).
+
 ## Review a script, or a query
 
 ### The failure it is aimed at
@@ -195,14 +233,16 @@ The query runs and returns a plausible number — nothing raises an error, the r
 | 2   | **Join-key sanity**               | Nullable key columns: the join that silently drops rows                                                                                                                         |
 | 3   | **Type & precision mismatch**     | Money in floating point, timestamps held as text, timestamps without a zone                                                                                                     |
 | 4   | **NULL semantics**                | `NOT IN (SELECT …)` over a nullable column — returns empty, no error                                                                                                            |
-| 5   | **Result plausibility**           | Row counts wildly outside expectation (needs a live database)                                                                                                                   |
+| 5   | **Result plausibility**           | A result that does not add up: a row count far outside what the joins and filters can allow, a breakdown that does not reconcile with its total, a column that comes back mostly NULL. Planned as two layers — predicted from the schema and its statistics offline, re-checked against the real result when `--db` is attached |
 | S   | **SQL-side semantics** *(S1, S3)* | A measure summed after a one-to-many join has multiplied it; a `LEFT JOIN` cancelled by a `WHERE` on the right table                                                            |
 | 6   | **Runtime guardrails**            | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 
-Checks 1–4, S and the seven layers run with or without a database. Check 5 needs a live connection
-and is partly wired up. The reviewer reads a script in two passes — the schema it leaves behind,
-and the actions it takes to get there — and its rules are files, so adding one does not mean
-editing the engine. Which rules exist, which checks are still missing, and what each of them needs
+Checks 1–4, S and the seven layers run with or without a database. Check 5 is the exception: it is
+the one check whose subject is a **result** rather than a statement, so it needs a live connection
+today and is only partly wired up. Its offline half — predicting what a result can and cannot look
+like from the schema and its statistics — is not written yet. The reviewer reads a script in two
+passes — the schema it leaves behind, and the actions it takes to get there — and its rules are
+files, so adding one does not mean editing the engine. Which rules exist, which checks are still missing, and what each of them needs
 is in [`docs/roadmap.md`](docs/roadmap.md).
 
 ### Reviewing somebody else's script
@@ -429,15 +469,19 @@ the error text you saw — `could not connect`, `ModuleNotFoundError: No module 
 ## Status
 
 **Early, and unreleased — there is no tag yet; `__version__` is `0.1.0`.** The offline path runs
-end to end; live mode is partly wired up. Done: checks 1–4 and
-hygiene, the S1 and S3 statement checks, the seven-layer guardrail and its selftests, live
-catalogue and `pg_stats` reads, the knowledge layer on JSON or pgvector, the eval harness, the
-change-action reader, 9 rules in three shipped rule packs, and 133 offline QA cases. Rules are
-files: a pack is verified against its own examples when it loads, a rule can be searched for from
-a description and two scripts (`--infer`), a pack that repeats or contradicts itself is caught
-before it is applied, and a pack that needs facts from the live catalog is refused over a script
-instead of reported clean. Not done: the migration diff, rules over the statement rather than the
-schema, and S2/S4/S5/S6.
+end to end; live mode is partly wired up.
+
+| | Built | Not built |
+| --- | --- | --- |
+| **Review a script** | change actions read as actions (16 kinds), 9 rules in three packs, every pack verified against its own examples on load, `--infer` from a description and two scripts | rules over a statement rather than a schema (R8) |
+| **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the offline half of result plausibility (check 5) |
+| **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs (R12) |
+| **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes (R13), and a front door for a statement you wrote (R11) |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 133 offline QA cases, CI on Python 3.10–3.13 | the migration diff, Oracle |
+
+A rule pack is verified against its own examples when it loads, a pack that repeats or contradicts
+itself is caught before it is applied, and a pack that needs facts from the live catalog is refused
+over a script instead of reported clean.
 
 ## Known limitations
 
@@ -470,6 +514,14 @@ schema, and S2/S4/S5/S6.
   are two fact models, and a review reads one of them — the one exception is the indexes a script
   under review adds, which are carried onto the catalog facts because that is the state the
   migration leaves behind.
+- **The fence does not cover every read this project makes.** Three `Toolbox` calls pass `guard()`;
+  `snapshot.py`'s five catalog reads go straight to psycopg, and there is no command-line way in
+  for a statement a person wrote. Making every live read pass the one gate is blocked on two defects
+  in the gate itself, both measured: L3 deny-lists `COMMENT`, which two of those catalog reads use
+  as a column alias, so they cannot pass at all; and L6 matches `LIMIT` anywhere in the text, so an
+  inner `LIMIT` exempts a statement from the outer cap, and three of them would be silently cut to
+  100 rows. A catalog read that returns 100 of 300 indexes reports no duplicate index — which is
+  worse than reporting nothing. It is R13 in [`docs/roadmap.md`](docs/roadmap.md).
 
 ## FAQ
 
@@ -515,6 +567,10 @@ form a model can use: recall how the problem was solved before, look at the inst
 description of it, and only then let a statement through. That last step is the one I trust a
 model with least, which is why it is written as fixed rules.
 
+**That is what AI × DBA means in this repository.** The model is on both ends — it writes the
+statements, and it writes the diagnosis — and what sits in the middle is DBA judgement, written
+down as rules a person can read and check rather than as confidence in a model.
+
 ## Contributing
 
 Issues and PRs welcome — especially **real-world examples of plausible-but-wrong SQL**
@@ -525,6 +581,10 @@ Write the way the opening reads: name the script, the query, the symptom or the 
 and introduce the layer only after the reader has recognised the work. Use the verb for the work
 (review a script, diagnose an instance) rather than a noun phrase, and say what something does
 rather than why it was built that way.
+
+**Say where the AI is and where the DBA is, whenever a passage is about either.** This is an
+AI × DBA project: a passage that mentions the model without saying what catches it — or the checks
+without saying what they are catching — tells half the story.
 
 ## License
 

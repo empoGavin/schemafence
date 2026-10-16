@@ -1,9 +1,11 @@
 # Roadmap
 
 What is built, what is next, and in what order. Read it as the DBA work it takes over: a script
-reviewed, a query checked for the number it gets wrong, a question answered from the runbook, a
-live instance read. The two sections at the end say what this project deliberately will not do,
-because that is the part that keeps it from turning into a general-purpose SQL linter.
+reviewed, a statement checked for the number it gets wrong, a question answered from the runbook, a
+live instance diagnosed. The project has three parts — **review**, a **diagnostic agent**, and
+**the fence** — and this file is where the next step of each is written down. The two sections at
+the end say what this project deliberately will not do, because that is the part that keeps it from
+turning into a general-purpose SQL linter.
 
 ## The gap this roadmap fills
 
@@ -117,15 +119,17 @@ test a definition when it changes.
 
 ## Requested, and where each one lands
 
-Six things were asked for that the tables above do not yet cover, and four more
-came out of reviewing the code against them. Each one reads and reports. None of
-them executes, so none of them changes what this project is.
+Six things were asked for that the tables above do not yet cover; four more came out of reviewing
+the code against them; R11 came out of writing `docs/architecture.md`; and R12 to R15 came out of
+the positioning revision of 2026-10-16, which is where the three parts this project is made of were
+set out. All but R15 read and report; R15 is a front door to the gate rather than a new reader.
+None of them executes a change, so none of them changes what this project is.
 
 | # | Asked for | Lands in | State |
 | --- | --- | --- | --- |
 | **R1** | a table with no primary key is a finding | a rule pack | **done** — `rules/table-hygiene.json`, rule `table-must-have-primary-key` |
 | **R2** | one concept, one standard: naming, type, unit, enum | a rule pack, then tier 4 | partly. The comment rules shipped; naming, unit and enum still need rules, and today only check H and check 1 read naming. |
-| **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Tier 2 is its finished form. |
+| **R3** | a row count far outside expectation | `check 5`, then tier 2 | `check 5` answers one question and needs a live connection. Its finished form is R14, where the same question is asked about the whole result rather than the row count alone. |
 | **R4** | a review rule is a description and its examples, not code | `schemafence/rulepack.py`, `schemafence/facts.py`, `rules/*.json` | **done** — the fact registry, the vocabulary, `--infer` and the overlap checks are all below |
 | **R5** | the B-class errors, not only the A class | `checks_sql.py`, then tier 3 | S2, S4, S5, S6, and the counterexample tier. |
 | **R6** | a change script is judged by its actions, not by the schema it leaves behind | `ddl.py`, rule packs | **done** — `ALTER`, `DROP`, `CREATE INDEX`, `COMMENT ON`, DML and session statements are read as actions; every statement no reader claimed is listed by position; a change kind the vocabulary does not declare is reported rather than silently produced; and a file that yields nothing at all exits 2. The same pass collapsed the four spellings of one primary key into one fact, which is what let the rule cover all of them |
@@ -134,6 +138,10 @@ them executes, so none of them changes what this project is.
 | **R9** | a rule that needs what the database already holds | a `catalog` fact model, `pg_index` | **done** — `rules/index-hygiene.json` refuses a script and asks for `--db`; the row shape is held identical to the script reader's by `tests/qa_probe.py` M1. The query itself has not been run against a server yet. |
 | **R10** | the schema audit says when it read nothing, not only the reviewer | `demo.py`, `checks.py` | not done — checks 1 to H are functions of a schema, so a file with no tables in it yields `0 finding(s)` and exit 0 with nothing said. A script holding only `\copy … from 'x.csv'` and `VACUUM FULL;` reproduces it, and the same file through `python -m schemafence.review` exits 2. |
 | **R11** | a query to check, the way a script can be checked | `schemafence/review.py` | not done — `checks_sql.py` has no command line. `demo.py` runs its checks as a selftest and the library exposes `check_sql`, so one of the four jobs on the desk has no front door: you cannot hand it your own query and be handed a report. Found while writing `docs/architecture.md`, which has to say so. |
+| **R12** | a diagnostic run of an instance, and a memory of past ones | a new module, `snapshot.py`, a store of past runs | not done — the pass that walks a set of checks over one instance, prints what came back, and says what the findings add up to; and the memory that would make the agent know *this* instance rather than instances in general. Both things it would run on already exist: the live read and the schema checks. |
+| **R13** | every read this project makes against a live database goes through the one gate | `snapshot.py`, `guard.py` | not done, and blocked on two defects in the gate itself, both measured. L3 deny-lists `COMMENT`, which `TABLES_SQL` and `COLUMNS_SQL` use as a column alias, so those two cannot pass at all; L6 matches `LIMIT` anywhere in the text, so an inner `LIMIT` exempts a statement from the outer cap and the other three would be cut to 100 rows. A catalog read that returns 100 of 300 indexes reports no duplicate index, which is worse than reporting nothing. |
+| **R14** | a result that does not add up is a finding | a new module beside `checks_sql.py` | not done. Two layers judged by one set of criteria: predicted from the schema and its statistics offline, re-checked against the real result when `--db` is attached. It absorbs R3, which was the same question asked about row counts only. The live half would go through the gate. |
+| **R15** | a front door to the gate, so a statement a person wrote can be handed to it | `schemafence/guard.py` | not done: the fence is a library function today. You reach it with `from schemafence import guard`, and nothing on the command line does. The front door is `--sql` and `--file`, exit code 0 allowed / 1 blocked / 2 nothing recognised, printing the verdict, the layer that produced it, and the session-hardening statements the caller has to run for the answer to hold. Only the front door gets built: the decision stays in one pure function, so an HTTP or MCP face over it later is a wrapper rather than a second implementation. |
 
 R3 keeps the read-only rule. `pg_class.reltuples` and `pg_stats` are read; a
 live connection is not a write connection, which is why the `--db` axis has

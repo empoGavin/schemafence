@@ -1227,6 +1227,7 @@ def doc_cases() -> None:
     retired = {
         "constraint layer between LLMs and databases": "the banner the project retired",
         "two halves": "a section name the restructure removed",
+        "It never calls a language model": "a banner the positioning revision replaced with where the model sits",
     }
     stale = sorted({f"{d.relative_to(ROOT).as_posix()} — {why}"
                     for d in docs for phrase, why in retired.items()

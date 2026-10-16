@@ -373,7 +373,9 @@ M1 里手写的那一行一致。
 - **把改掉的措辞落在第二份文件里。** README 重写时把退役横幅 `constraint layer between LLMs
   and databases` 删了，但同一句话在别的文档里还有；这一轮重写又把 `Two halves` 这个小节名去掉了，
   而 `docs/roadmap.md` 里三处 `the two halves` 留着，指向一个已经不存在的小节。**一份文档改口径，
-  另一份不会自己跟着改。**
+  另一份不会自己跟着改。** 定位重订（2026-10-16）又撤掉一条：`It never calls a language model`
+  — 本项目在诊断那一半是要用模型的，那句话跟「AI 诊断 Agent」并排放着会被读成自相矛盾。它也进了
+  N2 的措辞表：这种句子回来时不会报错，只会把一个已经不成立的前提写给读者。
 - **文档里的版本与代码里的版本各写一遍。** README 的 Status 行要写 `__version__` 是多少（读者要
   知道自己在看哪个版本），而真值只有 `schemafence/__init__.py` 一处；改代码不改 README，读者就
   被指到一个不存在的版本号上。
@@ -384,7 +386,7 @@ M1 里手写的那一行一致。
 | 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
 |---|---|---|---|---|---|---|
 | N1 | 链接健康 | `README.md` + `docs/*.md` | 抽出全部相对链接，逐个解析 | 每个都指向存在的文件（外部 URL 与 `#` 锚点跳过） | 0 dead | PASS |
-| N2 | 退役措辞 | 同上 | 搜已退役的横幅文字与已删的小节名 | 没有任何文档还带着它们（`README.md` 与 `docs/*.md` 都算） | 0 | PASS |
+| N2 | 退役措辞 | 同上 | 搜已退役的横幅文字、已删的小节名、以及被重订取代的那句「从不调用语言模型」 | 没有任何文档还带着它们（`README.md` 与 `docs/*.md` 都算） | 0 | PASS |
 | N3 | 数字保真 | `examples/sample_schema.sql` | `_null_fraction()` 现算两个列的 NULL 比例，断言 `quickstart.md` 说的就是它 | `shop.orders.user_id` = `20.0% NULL`、`shop.users.email` = `25.0% NULL` 都在文中 | 20.0% / 25.0% | PASS |
 | N4 | 版本一致 | `schemafence.__version__` | 从 README 抽 `` `__version__` is `X` ``，与包实际导出的值比 | 两边说的是同一个号 | 0.1.0 / 0.1.0 | PASS |
 

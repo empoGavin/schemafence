@@ -1,13 +1,16 @@
-"""schemafence — review a script, check a query, answer from the runbook, diagnose a live instance.
+"""schemafence — review a script, check a statement, diagnose a live instance, answer from the runbook.
 
-A DBA has four things on their desk: a script to review, a query somebody says is returning the
-wrong number, a question you would otherwise go to the runbook for, and a live instance to
-diagnose.  The script and the query are pure functions here, the question is answered with the
-note quoted back, and the live read is how a rule finds out what the tables already carry.
+An AI × DBA project: a model writes the statements and it writes the diagnosis, and DBA judgement
+is what catches them.  A DBA has four things on their desk: a script to review, a statement
+somebody says is returning the wrong number, a question you would otherwise go to the runbook for,
+and a live instance to diagnose.  The script and the statement are pure functions here, the
+question is answered with the note quoted back, and the live read is how a rule finds out what the
+tables already carry.
 
-It never calls a language model, and that is deliberate: give it the same script twice and you
-get the same report twice, whatever model is in the room, or with none.  The agent is the half
-allowed to be wrong.
+The division of labour is the point.  A model may drive the tool loop and may draft a rule while a
+person is authoring one, and it never decides: give it the same script twice and you get the same
+report twice, whatever model is in the room, or with none.  The agent is the half allowed to be
+wrong; the checks and the fence are not.
 
 Public surface:
     parse_ddl(text)  -> Schema          (a script as a schema, plus its change actions)
