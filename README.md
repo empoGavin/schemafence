@@ -23,15 +23,11 @@
 > wrong number, a question you would otherwise go to the runbook for, and a live instance to
 > diagnose.
 >
-> Hand it the script and it lists the problems in it before anybody runs it: a table dropped, a
-> column added `NOT NULL` with no default, an index the table already carries under another name.
-> Hand it the statement and it lists what the statement will get wrong while the database reports
-> no error at all: a measure summed after a one-to-many join, a `LEFT JOIN` cancelled by a `WHERE`,
-> a join key that is nullable — and, where there is a result to look at, whether that result is
-> plausible. Ask the question and it answers from the runbook, quoting the note it read.
-> Point it at a live instance and it reads what is there now and keeps what it saw: which tables,
-> which indexes those tables already carry, and what earlier passes found — so it is the agent that
-> knows *this* instance, rather than instances in general.
+> Hand it a script or a statement and it lists what will go wrong before anything runs: a table
+> dropped, a `NOT NULL` column added with no default, a measure summed after a one-to-many join, a
+> `LEFT JOIN` cancelled by a `WHERE`. Ask the question and it answers from your own runbook,
+> quoting the note it read. Point it at a live instance and it reads what is there now and keeps
+> what it saw — so it is the agent that knows *this* instance rather than instances in general.
 >
 > The reads the agent makes of a live database go through one fence first: read-only statements pass,
 > DDL is refused, and no model decides whether a statement may run. What does not reach it yet is
@@ -50,31 +46,27 @@
 > 就是 DBA 手上的四件事：审一份脚本、查一条被人说「数字不对」的查询、答一个原本要去翻运维手册
 > 的问题、诊断一套活库。
 >
-> 把脚本丢进去，它先列出这脚本会有什么问题，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没有
-> 默认值的列、表上其实早就有个同列同序的索引，只是名字不同。把语句丢进去，它列出这条语句会错在哪，
-> 而数据库一句错都不报：一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消、连接键
-> 本身可空 —— 还有，拿到结果之后，这个结果本身可不可信。问题问它，它从你自己的运维手册里找答案，
-> 并把出处原文贴出来。连上活库，它读出库里现在有什么，也记下上一次读到了什么：哪些表，表上已经
-> 挂着哪些索引，前几轮查出了什么 —— 所以它懂的是**这一套**库，不是「库」这个东西。
+> 丢一份脚本或一条语句进去，它先列出会错在哪，再由人决定要不要跑：删表、加一个 `NOT NULL` 又没
+> 有默认值的列、一对多 JOIN 之后再求和、`LEFT JOIN` 被 `WHERE` 里的条件悄悄取消。问它一个问题，
+> 它从你自己的运维手册里找答案，并把出处原文贴出来。连上活库，它读出库里现在有什么，也记下上一次
+> 读到了什么 —— 所以它懂的是**这一套**库，不是「库」这个东西。
 >
 > 它读到活库上的每一条语句，都先过同一道闸门：只放只读语句、DDL 一律拒，「能不能跑」从不由模型说了算。
-> 还没走到闸门上的那几处，写在下面
-> [What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) 一节里。
+> 还没走到闸门上的那几处，写在本篇后面的
+> [这一节](#what-it-will-do-to-your-database-and-what-it-will-not) 里。
 
 **Contents** — [Quick start](#quick-start) ·
-[What it will do to your database](#what-it-will-do-to-your-database-and-what-it-will-not) ·
+[What it will do to your database, and what it will not](#what-it-will-do-to-your-database-and-what-it-will-not) ·
 [Ask a question, or run a diagnosis](#ask-a-question-or-run-a-diagnosis) ·
-[Review a script](#review-a-script-or-a-query) ·
-[From your examples to a rule](#from-your-examples-to-a-rule) ·
-[A rule that needs the live database](#a-rule-that-needs-the-live-database) ·
-[Environment](#environment) · [Status](#status) · [Known limitations](#known-limitations) ·
-[FAQ](#faq) · [Contributing](#contributing)
+[Review a script, or a query](#review-a-script-or-a-query) · [Environment](#environment) ·
+[Status](#status) · [Known limitations](#known-limitations) · [FAQ](#faq) ·
+[Why I built this](#why-i-built-this) · [Contributing](#contributing) · [License](#license)
 
-Docs: [architecture](docs/architecture.md) — which file does what ·
-[quickstart](docs/quickstart.md) — offline, then a real database ·
-[corpus](docs/corpus.md) — what to load and how well it answers ·
-[bench](docs/bench.md) — the numbers and how to reproduce them ·
-[roadmap](docs/roadmap.md) — what is built and what is next
+Docs: [quickstart](docs/quickstart.md) — offline, then a real database ·
+[architecture](docs/architecture.md) — how the pieces fit together ·
+[corpus](docs/corpus.md) — what to load, and how well it answers ·
+[bench](docs/bench.md) — the numbers, and how to reproduce them ·
+[roadmap](docs/roadmap.md) — what is built, and what is next
 
 ## Quick start
 
@@ -123,18 +115,20 @@ statements:
 - **Anything that runs against a live database goes through one gate.** `guard()` is the one
   place a statement is allowed to reach a database: it lets read-only statements through, refuses
   DDL, and writes every call to `agent_trace.jsonl` with the decision, the layer and the
-  duration. The agent's tools pass it today; what does not yet is named further down.
+  duration. The agent's tools pass it today; what does not yet is named under
+  [Known limitations](#known-limitations).
 - **No model decides whether a statement may run.** The checks and the gate are fixed code, and
   retrieved text goes into the answer and no further.
 
-A fourth thing sits beside those three, and it is the one allowed to be wrong: the
-question-answering side (`schemafence/agent.py`, `schemafence/knowledge.py`). A bad answer is bad
-advice, not damaged data, so what it has instead of a guarantee is a hit rate per question over 44
-of them — [`eval/report-dba.md`](eval/report-dba.md). Its two questions of record are *why is the
-orders table slow* and *what does `idle in transaction` cost us*; storage numbers under both
-backends are in [`docs/bench.md`](docs/bench.md).
+The diagnostic agent answers a question and reads an instance: the same agent, the same stored
+notes, both ways of answering. It is the half allowed to be wrong, because a bad answer is bad
+advice rather than damaged data. What it has instead of a guarantee is a hit rate per question over
+44 of them — [`eval/report-dba.md`](eval/report-dba.md) — answered through
+`schemafence/knowledge.py` and `schemafence/agent.py`. Its two questions of record are *why is the
+orders table slow* and *what does `idle in transaction` cost us*; storage numbers under both backends
+are in [`docs/bench.md`](docs/bench.md).
 
-The reviewer and the fence do not share an input, and that is the part worth knowing:
+The reviewer and the fence take different things in, and that is the part worth knowing:
 
 |  | **the reviewer** — reports | **the fence** — decides |
 | --- | --- | --- |
@@ -142,24 +136,18 @@ The reviewer and the fence do not share an input, and that is the part worth kno
 | Input may contain writes | yes — it runs nothing | no — read-only only, DDL refused outright |
 | Hands back | findings, each with a why and a fix | allow or block, and the layer that stopped it |
 | Changed by | rules are files under `rules/`, and more can be added | thresholds are configuration; the decision logic is not |
-| Lives in | `checks.py`, `checks_sql.py`, `rules/*.json` | `guard.py` |
+| Written in | `checks.py`, `checks_sql.py`, `rules/*.json` | `guard.py` |
 
-So a change script never reaches the gate. `guard()` refuses DDL by construction, so the script
-goes to the reviewer, the report goes to a person, and the person decides — that is the flow, not
-a gap in it. A person, a migration tool and a model all write these scripts, and the reviewer does
-not care which of them it is.
+So a change script never reaches the gate: `guard()` refuses DDL by construction, the script goes to
+the reviewer, the report goes to a person, and the person decides — that is the flow, not a gap in
+it. A person, an ORM, a schema tool and a model all write these scripts, and the reviewer does not
+care which of them it is.
 
-The reviewer and the fence meet in one place, `Toolbox` in `schemafence/tools.py`: retrieved
-passages go into the answer text and no further, so a mediocre retrieval score is a quality
-problem, not a safety one.
-
-**What actually reaches that gate is narrower than what it is meant to cover.** Three calls from
-`Toolbox` pass it; the reviewer's own reads against a live database go straight to psycopg, because
-those statements are constants in `snapshot.py` (R13). And there is no way to hand it a statement *you*
-wrote: no `--sql`, no `--file`, and no service to call. That is R15 in
-[`docs/roadmap.md`](docs/roadmap.md), and together with the reviewer's own reads it is the whole of
-the difference between "every statement that reaches a live database goes through here" and that
-sentence being true.
+They are wired together in exactly one place, `Toolbox` in `schemafence/tools.py`: retrieved passages
+go into the answer text and no further, so a mediocre retrieval score is a quality problem, not a
+safety one. **What reaches that gate is narrower than what it is meant to cover** — the reviewer's
+own reads, and no way in for a statement you wrote (there is no `--sql`, no `--file`, and no service
+to call) — and both gaps are measured under [Known limitations](#known-limitations), as R13 and R15.
 
 ## Ask a question, or run a diagnosis
 
@@ -231,29 +219,28 @@ checks over a schema (`checks.py`). It is R12 in [`docs/roadmap.md`](docs/roadma
 NL2SQL has had a few years now, and the hard part turned out to be the database rather than
 the language model. The common failure is not a syntax error but a misread schema: the wrong
 table, a lossy join key, a nullable column read as plain, two similarly named fields confused.
-The query runs and returns a plausible number — nothing raises an error, the report is wrong.
-
-> SQL 不会报错，报表只是"错了"——没有人会收到任何告警。
-
 ### What it checks
 
-| #   | Check                             | Catches                                                                                                                                                                         |
-| --- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Schema resolution**             | Near-duplicate tables and columns the model will confuse (`orders` / `orders_archive`)                                                                                          |
-| 2   | **Join-key sanity**               | Nullable key columns: the join that silently drops rows                                                                                                                         |
-| 3   | **Type & precision mismatch**     | Money in floating point, timestamps held as text, timestamps without a zone                                                                                                     |
-| 4   | **NULL semantics**                | `NOT IN (SELECT …)` over a nullable column — returns empty, no error                                                                                                            |
-| 5   | **Result plausibility**           | A result that does not add up: a row count far outside what the joins and filters can allow, a breakdown that does not reconcile with its total, a column that comes back mostly NULL. Planned as two layers — predicted from the schema and its statistics offline, re-checked against the real result when `--db` is attached |
-| S   | **SQL-side semantics** *(S1, S3)* | A measure summed after a one-to-many join has multiplied it; a `LEFT JOIN` cancelled by a `WHERE` on the right table                                                            |
-| 6   | **Runtime guardrails**            | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
+| # | Check | Catches |
+| --- | --- | --- |
+| 1 | **Schema resolution** | Near-duplicate tables and columns the model will confuse (`orders` / `orders_archive`) |
+| 2 | **Join-key sanity** | Nullable key columns: the join that silently drops rows |
+| 3 | **Type & precision mismatch** | Money in floating point, timestamps held as text, timestamps without a zone |
+| 4 | **NULL semantics** | `NOT IN (SELECT …)` over a nullable column — returns empty, no error |
+| 5 | **Result plausibility** | A result that does not add up — see below |
+| S | **SQL-side semantics** *(S1, S3)* | A measure summed after a one-to-many join has multiplied it; a `LEFT JOIN` cancelled by a `WHERE` on the right table |
+| 6 | **Runtime guardrails** | Seven layers: L1 single statement · L2 read-only shape · L3 deny-listed keywords · L4 dangerous functions · L5 table whitelist · L6 forced LIMIT · L7 audit + session hardening |
 
-Checks 1–4, S and the seven layers run with or without a database. Check 5 is the exception: it is
-the one check whose subject is a **result** rather than a statement, so it needs a live connection
-today and is only partly wired up. Its offline half — predicting what a result can and cannot look
-like from the schema and its statistics — is not written yet. The reviewer reads a script in two
+**Check 5** is the odd one: its subject is a **result** rather than a statement, so it needs a live
+connection today and is only partly wired up. It looks for a row count far outside what the joins and
+filters can allow, a breakdown that does not reconcile with its total, or a column that comes back
+mostly NULL. Its offline half — predicting what a result can and cannot look like from the schema and
+its statistics — is not written yet.
+
+Checks 1–4, S and the seven layers run with or without a database. The reviewer reads a script in two
 passes — the schema it leaves behind, and the actions it takes to get there — and its rules are
-files, so adding one does not mean editing the engine. Which rules exist, which checks are still missing, and what each of them needs
-is in [`docs/roadmap.md`](docs/roadmap.md).
+files, so adding one does not mean editing the engine. Which rules exist, which checks are still
+missing, and what each of them needs is in [`docs/roadmap.md`](docs/roadmap.md).
 
 ### Reviewing somebody else's script
 
@@ -426,11 +413,12 @@ decides: the same eighteen fields are built from catalog rows and from a script,
 in `tests/qa_probe.py` M1, so a rule cannot tell which of the two it is reading. Run
 `python -m schemafence.review --db "$PG_DSN"` on the VM to close that gap.
 
-Check S is the one worth explaining. `checks.py` reads the schema and never sees a statement;
-`guard.py` reads the statement and never sees a schema. A fan-out and a cancelled `LEFT JOIN`
-are valid on both sides and only visible where the two meet, so neither can go into the layer
-that already exists. The new module reads both, reports, and never decides whether anything
-runs — its rules, its abstentions and the tiers above it are in
+### Using it as a library
+
+Check S is the one worth explaining: `checks.py` reads the schema and never sees a statement,
+`guard.py` reads the statement and never sees a schema, and a fan-out or a cancelled `LEFT JOIN` is
+valid on both sides and only visible where the two meet. The module that reads both reports, and
+never decides whether anything runs; what it still abstains from is in
 [`docs/roadmap.md`](docs/roadmap.md). As a library:
 
 ```python
@@ -443,6 +431,8 @@ print(guard("SELECT * FROM shop.orders; DROP TABLE shop.users").layer)   # L1
 pack = load_rulepack("rules/table-hygiene.json")   # refused if its own examples do not hold
 print(len(review_ddl([pack], open("colleague.sql").read()).findings))
 ```
+
+### Trying it against your own database
 
 With a live database (optional): `bash scripts/setup_pg.sh` covers the `apt` and `dnf` families,
 then `python demo.py --db postgresql://…/fence_demo` — step by step in the
@@ -487,11 +477,7 @@ end to end; live mode is partly wired up.
 | **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the offline half of result plausibility (check 5) |
 | **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs (R12) |
 | **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes (R13), and a front door for a statement you wrote (R11) |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 134 offline QA cases, CI on Python 3.10–3.13 | the migration diff, Oracle |
-
-A rule pack is verified against its own examples when it loads, a pack that repeats or contradicts
-itself is caught before it is applied, and a pack that needs facts from the live catalog is refused
-over a script instead of reported clean.
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 135 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 ## Known limitations
 
@@ -515,8 +501,9 @@ over a script instead of reported clean.
 - **The eval harness is a ruler under revision.** Each question accepts a set of sources (`甲 / 乙`),
   but it is still one rank against that set, so read the per-question table before the headline.
 - **Corpora are searched one directory at a time.** IDF is computed over the corpus that was
-  ingested, so mixing two packs in one store moves the hit rate silently. Check 5 is not in
-  the report yet, the planner is keyword-based on purpose, and the live path is PostgreSQL only.
+  ingested, so mixing two packs in one store moves the hit rate silently.
+- **Three smaller ones.** Check 5 is not in the eval report yet, the planner is keyword-based on
+  purpose, and the live path is PostgreSQL only.
 - **A duplicate index is exact, not approximate.** Two indexes are the same when the columns match
   in order, the method matches and neither is weaker than the other; an index on `(a)` is *not*
   reported as covered by one on `(a, b)`, though a btree on `(a, b)` serves it. And the two readers

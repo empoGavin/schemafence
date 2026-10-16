@@ -1209,8 +1209,9 @@ def doc_cases() -> None:
 
     Every case here has already gone wrong once or is one edit away from it: a link
     to a file a merge renamed, wording the rewrite retired but left behind in a
-    second doc, a NULL fraction copied forward from an older sample, and a version
-    the README quotes while the package defines another.
+    second doc, a NULL fraction copied forward from an older sample, a version
+    the README quotes while the package defines another, and a Contents block
+    that listed subsections among the sections while leaving sections out.
     """
     docs = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     link = re.compile(r"\]\(([^)\s]+)\)")
@@ -1236,6 +1237,9 @@ def doc_cases() -> None:
             "a claim wider than the gate reaches, which the README itself corrects (R13, R15)",
         "执行到活库上的每条语句先过同一道闸门":
             "the same claim in the Chinese half",
+        "Lives in": "a table label that names the module rather than the reader's question",
+        "the tiers above it":
+            "an allusion to a ranking the README never defines; roadmap's own heading spells it out",
     }
     stale = sorted({f"{d.relative_to(ROOT).as_posix()} — {phrase!r}: {why}"
                     for d in n2_reads for phrase, why in retired.items()
@@ -1259,6 +1263,27 @@ def doc_cases() -> None:
     check("N5", "the opening still says why each of the three parts exists, in both halves",
           not absent,
           "; ".join(absent) if absent else "fence, rules and the agent, in both halves")
+
+    # N6 exists because N1 cannot see this: it skips every anchor, and the
+    # Contents block is nothing but anchors. It had drifted twice — listing two
+    # subsections among the sections, and leaving two sections out entirely.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    def anchor(heading: str) -> str:
+        return re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", heading.strip().lower()))
+
+    top = {anchor(h): h for h in re.findall(r"^## (.+)$", readme, re.M)}
+    any_head = {anchor(h) for h in re.findall(r"^#{2,6} (.+)$", readme, re.M)}
+    inside = [a[1:] for a in re.findall(r"\]\((#[^)\s]+)\)", readme)]
+    listed = [a[1:] for a in
+              re.findall(r"\]\((#[^)\s]+)\)", readme.split("**Contents**", 1)[1].split("\n\n", 1)[0])]
+    trouble = ([f"anchor goes nowhere: #{a}" for a in inside if a not in any_head]
+               + [f"Contents omits {h!r}" for a, h in top.items() if a not in listed]
+               + [f"Contents lists #{a}, which is not a section" for a in listed if a not in top]
+               + [f"Contents lists #{a} twice" for a in sorted(set(listed)) if listed.count(a) > 1])
+    check("N6", "every in-page anchor resolves and Contents lists the sections, and nothing deeper",
+          not trouble,
+          "; ".join(trouble[:5]) if trouble else f"{len(top)} sections, all listed")
 
     sample = (ROOT / "examples" / "sample_schema.sql").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
