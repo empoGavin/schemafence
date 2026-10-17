@@ -40,7 +40,8 @@ from schemafence.knowledge import (Chunk, Embedder, JsonStore,    # noqa: E402
 from schemafence.rulepack import (find_overlaps, infer_rule,      # noqa: E402
                                   load_rulepack, review_schema,
                                   run_rulepack_selftest, vocabulary)
-from schemafence.snapshot import apply_script, build_schema       # noqa: E402
+from schemafence.snapshot import (COLUMNS_SQL, TABLES_SQL,        # noqa: E402
+                                  apply_script, build_schema)
 from schemafence.tools import Toolbox, run_tool_selftest          # noqa: E402
 
 PY = sys.executable
@@ -189,6 +190,29 @@ def guard_cases() -> None:
         "SELECT setval('shop.orders_id_seq', 1)", "L4"))
     check("A24", "FOR SHARE locking clause is blocked", *blocked(
         "SELECT * FROM shop.orders FOR SHARE", "L2"))
+    # A read-only statement may name a column `comment`; L3 used to take that
+    # word for the COMMENT statement and refuse the statement outright.
+    check("A25", "L3 leaves a column aliased `comment` alone", *allowed(
+        "SELECT obj_description(c.oid, 'pg_class') AS comment FROM pg_class c"))
+    check("A26", "COMMENT ON is still refused, and at L2", *blocked(
+        "COMMENT ON TABLE shop.orders IS 'x'", "L2"))
+    # A LIMIT inside parentheses bounds that subquery, not this call.
+    nested = guard("SELECT * FROM shop.orders WHERE id IN "
+                   "(SELECT order_id FROM shop.items LIMIT 1)")
+    check("A27", "L6 still caps a statement whose only LIMIT is nested",
+          nested.ok and nested.rewritten and "LIMIT 100" in nested.sql,
+          f"rewritten={nested.rewritten} sql={nested.sql!r}")
+    plain = guard("SELECT * FROM shop.orders LIMIT 5 OFFSET 2")
+    check("A28", "L6 leaves a top-level LIMIT with OFFSET alone",
+          plain.ok and not plain.rewritten, f"rewritten={plain.rewritten}")
+    tables_read, columns_read = guard(TABLES_SQL), guard(COLUMNS_SQL)
+    check("A29", "both catalogue reads pass the guard",
+          tables_read.ok and columns_read.ok,
+          f"tables: {tables_read.layer} {tables_read.reason}; "
+          f"columns: {columns_read.layer} {columns_read.reason}")
+    check("A30", "the column read gets its outer cap from the guard",
+          columns_read.ok and "LIMIT 100" in columns_read.sql,
+          columns_read.sql[-40:])
 
 
 # --------------------------------------------------------------------------- #

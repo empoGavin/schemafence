@@ -78,6 +78,12 @@ N1–N3 随「对外文档合并、并把文档里的数字改成现算」一起
 | A22 | 序列写 | 无 | `guard("SELECT nextval('shop.orders_id_seq')")` | `ok=False` | 首跑 `ok=True`（FAIL）→ 修复后 `layer=L4 dangerous function: nextval` | PASS |
 | A23 | 序列写 | 无 | `guard("SELECT setval('shop.orders_id_seq', 1)")` | `ok=False` | 首跑 `ok=True`（FAIL）→ 修复后 `layer=L4 dangerous function: setval` | PASS |
 | A24 | 加锁读 | 无 | `guard("SELECT * FROM shop.orders FOR SHARE")` | `ok=False`（非只读） | 首跑 `ok=True`（FAIL）→ 修复后 `layer=L2 locking clause: FOR SHARE` | PASS |
+| A25 | L3 不误杀列别名 | 无 | `guard("SELECT obj_description(c.oid, 'pg_class') AS comment FROM pg_class c")` | `ok=True` | 修复前 `ok=False layer=L3 forbidden keyword: COMMENT`（FAIL）→ 修复后 `ok=True` | PASS |
+| A26 | `COMMENT ON` 仍被拒 | 无 | `guard("COMMENT ON TABLE shop.orders IS 'x'")` | `ok=False`, `layer=L2` | 修复前即 `layer=L2`（L2 先判首词前缀），删词后不变 | PASS |
+| A27 | 内层 LIMIT 不免掉外层上限 | 无 | `guard("SELECT * FROM shop.orders WHERE id IN (SELECT order_id FROM shop.items LIMIT 1)")` | `ok=True`, `rewritten=True`, `sql` 含 `LIMIT 100` | 修复前 `rewritten=False`（FAIL）→ 修复后末尾附 `LIMIT 100` | PASS |
+| A28 | 顶层 LIMIT + OFFSET 不动 | 无 | `guard("SELECT * FROM shop.orders LIMIT 5 OFFSET 2")` | `ok=True`, `rewritten=False` | `rewritten=False` | PASS |
+| A29 | 两条 catalog 读过闸门 | 无 | `guard(TABLES_SQL)`、`guard(COLUMNS_SQL)` | 都 `ok=True` | 修复前两条都 `layer=L3 forbidden keyword: COMMENT`（FAIL） | PASS |
+| A30 | catalog 读拿到外层上限 | 无 | `guard(COLUMNS_SQL)` | `ok=True`, `sql` 含 `LIMIT 100` | 修复前 `ok=False`（FAIL）→ 修复后带 `LIMIT 100` | PASS |
 
 ## B. 路由（写请求 vs 疑问句）
 

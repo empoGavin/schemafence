@@ -477,7 +477,7 @@ built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
 | **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the reading of a result that would say a number is off |
 | **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs |
 | **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes, and a front door for a statement you wrote |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 138 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 144 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 ## Known limitations
 
@@ -514,13 +514,12 @@ built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
   migration leaves behind.
 - **The fence does not cover every read this project makes.** Three `Toolbox` calls pass `guard()`;
   `snapshot.py`'s five catalog reads go straight to psycopg, and there is no command-line way in
-  for a statement a person wrote. Making every live read pass the one gate is blocked on two defects
-  in the gate itself, both measured: L3 deny-lists `COMMENT`, which two of those catalog reads use
-  as a column alias, so they cannot pass at all; and L6 matches `LIMIT` anywhere in the text, so an
-  inner `LIMIT` exempts a statement from the outer cap, and three of them would be silently cut to
-  100 rows. A catalog read that returns 100 of 300 indexes reports no duplicate index — which is
-  worse than reporting nothing. Making every live read pass the one gate is on the
-  [roadmap](docs/roadmap.md) (Chinese).
+  for a statement a person wrote. Two defects in the gate itself stood in the way, and both are
+  fixed: L3 no longer refuses a column aliased `comment`, and a `LIMIT` nested in a subquery no
+  longer exempts a statement from the outer cap. What is left is the wiring, plus the decision it
+  needs — the cap defaults to 100 rows while a catalog read wants all of them, so `max_rows` has to
+  be set per read, or a table with more than a hundred columns loses the rest. Making every live
+  read pass the one gate is on the [roadmap](docs/roadmap.md) (Chinese).
 
 ## FAQ
 

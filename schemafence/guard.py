@@ -28,9 +28,12 @@ import time
 from dataclasses import dataclass, field
 
 ALLOWED_PREFIX = re.compile(r"^(SELECT|WITH|EXPLAIN|TABLE|VALUES)\b", re.IGNORECASE)
+# No COMMENT here: `COMMENT ON …` never starts with an allowed prefix, so L2
+# refuses it, and the word on its own is a legal column alias in a read-only
+# statement (`obj_description(...) AS comment`).
 FORBIDDEN_KEYWORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|GRANT|REVOKE|CREATE|COPY|MERGE"
-    r"|CALL|DO|LOCK|VACUUM|REINDEX|CLUSTER|COMMENT|REFRESH|SECURITY|SET|RESET|DISCARD"
+    r"|CALL|DO|LOCK|VACUUM|REINDEX|CLUSTER|REFRESH|SECURITY|SET|RESET|DISCARD"
     r"|INTO)\b",
     re.IGNORECASE,
 )
@@ -110,6 +113,25 @@ def _sanitize(sql: str) -> str:
     return " ".join("".join(out).split())
 
 
+def _top_level(sql: str) -> str:
+    """The statement with everything inside parentheses dropped.
+
+    A LIMIT in a subquery caps that subquery, not the rows this call returns,
+    so it cannot stand in for the caller's own limit.  ``_sanitize`` has
+    already removed string literals, so no parenthesis here is inside text.
+    """
+    out: list[str] = []
+    depth = 0
+    for ch in sql:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
 def guard(sql: str, *, max_rows: int = 100, table_whitelist=None,
           timeout_ms: int = 10_000) -> GuardResult:
     """Check (and if needed rewrite) a query before it is allowed near a database."""
@@ -163,7 +185,7 @@ def guard(sql: str, *, max_rows: int = 100, table_whitelist=None,
 
     body = raw.rstrip().rstrip(";").strip()
     final_sql = body
-    if not HAS_LIMIT.search(clean_body):
+    if not HAS_LIMIT.search(_top_level(clean_body)):
         final_sql = f"{body}\nLIMIT {max_rows}"
         result.rewritten = True
     result.sql = final_sql
