@@ -55,7 +55,7 @@ python demo.py          # no database, no model, no API key, about 30 seconds
 ```
 
 ```
-schemafence — a read-only DBA agent, a reviewer, and a fence
+schemafence — a read-only diagnostic agent, a reviewer, and a fence
 ====================================================================
 source : sample_schema.sql
 tables : 7      columns : 33
@@ -104,7 +104,7 @@ flowchart LR
 ```
 
 Solid is what is wired today. Dotted is the two gaps: both are listed under
-[Known limitations](#known-limitations), and work on them is on the [roadmap](docs/roadmap.md) (Chinese).
+[Known limitations](#known-limitations), and work on them is on the [roadmap](docs/roadmap.md).
 
 Read-only is not a setting here, it is the shape of the thing. Every command below obeys three
 statements:
@@ -126,7 +126,7 @@ advice rather than damaged data. What it has instead of a guarantee is a hit rat
 44 of them — [`eval/report-dba.md`](eval/report-dba.md) — answered through
 `schemafence/knowledge.py` and `schemafence/agent.py`. Two questions from the eval set — *why is the
 orders table slow* and *what does `idle in transaction` cost us* — show what that looks like; storage
-numbers under both backends are in [`docs/bench.md`](docs/bench.md) (Chinese).
+numbers under both backends are in [`docs/bench.md`](docs/bench.md).
 
 The reviewer and the fence take different things in, and that is the part worth knowing:
 
@@ -193,7 +193,7 @@ your own. **Corpus shape decides retrieval quality more than size does:** the ha
 scores 100% top-5 over 50 questions while the full manual scores 82.5% over 40, and merging
 them costs the runbook questions 30 points while costing the syntax questions nothing. Sizes,
 the measured cost of merging (96.8% → 74.6% over 201 questions, 89.7% at `--k 20`) and the
-pgvector ingest shapes are in [`docs/corpus.md`](docs/corpus.md) (Chinese), along with the rules for notes
+pgvector ingest shapes are in [`docs/corpus.md`](docs/corpus.md), along with the rules for notes
 that cannot leave a company. `--eval`
 is a measuring stick, not a gate: 44 questions over 40 chunks come out at **97.7% top-5**
 offline, with the relevance floor named rather than guessed.
@@ -210,7 +210,7 @@ general.
 
 **There is no diagnostic command yet**, and nothing is kept between runs. What the agent works with
 is the live read (`snapshot.py`) and the checks over a schema (`checks.py`); the pass that would tie
-them into one conclusion is on the [roadmap](docs/roadmap.md) (Chinese).
+them into one conclusion is on the [roadmap](docs/roadmap.md).
 
 ## Review a script, or a query
 
@@ -235,12 +235,12 @@ table, a lossy join key, a nullable column read as plain, two similarly named fi
 connection. It looks for a row count far outside what the joins and filters can allow, a breakdown
 that does not reconcile with its total, or a column that comes back mostly NULL. The half that
 predicts what a result can and cannot look like from a schema and its statistics is not built; the
-[roadmap](docs/roadmap.md) (Chinese) carries it.
+[roadmap](docs/roadmap.md) carries it.
 
 Checks 1–4, S and the seven layers run with or without a database. The reviewer reads a script in two
 passes — the schema it leaves behind, and the actions it takes to get there — and its rules are
 files, so adding one does not mean editing the engine. Which rules exist, which checks are still
-missing, and what each of them needs is in [`docs/roadmap.md`](docs/roadmap.md) (Chinese).
+missing, and what each of them needs is in [`docs/roadmap.md`](docs/roadmap.md).
 
 ### Reviewing somebody else's script
 
@@ -410,7 +410,7 @@ one level down: a fact has one shape, however it was written, and a rule names t
 and from a script, field for field, in `tests/qa_probe.py` M1, so a rule cannot tell which of the
 two it is reading. The `pg_index` query itself needs a server to exercise:
 `python -m schemafence.review --db "$PG_DSN" --ddl release.sql`, against the instance the
-[quickstart](docs/quickstart.md) (Chinese) sets up.
+[quickstart](docs/quickstart.md) sets up.
 
 ### Using it as a library
 
@@ -418,7 +418,7 @@ Check S is the one worth explaining: `checks.py` reads the schema and never sees
 `guard.py` reads the statement and never sees a schema, and a fan-out or a cancelled `LEFT JOIN` is
 valid on both sides and only visible where the two meet. The module that reads both reports, and
 never decides whether anything runs; what it still abstains from is in
-[`docs/roadmap.md`](docs/roadmap.md) (Chinese). As a library:
+[`docs/roadmap.md`](docs/roadmap.md). As a library:
 
 ```python
 from schemafence import check_sql, guard, load_rulepack, parse_ddl, review_ddl
@@ -435,7 +435,7 @@ print(len(review_ddl([pack], open("colleague.sql").read()).findings))
 
 With a live database (optional): `bash scripts/setup_pg.sh` covers the `apt` and `dnf` families,
 then `python demo.py --db postgresql://…/fence_demo` — step by step in the
-[Oracle Linux 10 VM or Cloud Studio](docs/quickstart.md) (Chinese) walkthrough. A question the agent refuses:
+[Oracle Linux 10 VM or Cloud Studio](docs/quickstart.md) walkthrough. A question the agent refuses:
 
 ```
 [ask] 帮我删掉 orders 这张表
@@ -453,7 +453,7 @@ then `python demo.py --db postgresql://…/fence_demo` — step by step in the
 | Database | PostgreSQL, only for `--db`. The vector store needs `pgvector` and its HNSW index |
 | Embedding and chat | no SDK. Both are plain HTTPS calls made with `urllib`, so switching provider is an environment variable: `SF_EMBED_API_KEY`, `SF_LLM_API_KEY`, and their `_BASE_URL` / `_MODEL` partners. Anything OpenAI-compatible works |
 | Network | not needed. The offline path, the selftests and the rule packs make no request |
-| OS | anywhere Python runs. CI is `ubuntu-latest`; the two walkthroughs are [Oracle Linux 10 and Cloud Studio](docs/quickstart.md) (Chinese) |
+| OS | anywhere Python runs. CI is `ubuntu-latest`; the two walkthroughs are [Oracle Linux 10 and Cloud Studio](docs/quickstart.md) |
 
 ```bash
 git clone https://github.com/empoGavin/schemafence && cd schemafence
@@ -461,7 +461,7 @@ python demo.py                     # offline path: nothing to install, no key, n
 pip install -r requirements.txt    # only when you are about to use --db
 ```
 
-When a step fails, the [quickstart](docs/quickstart.md) (Chinese) ends with a troubleshooting table keyed by
+When a step fails, the [quickstart](docs/quickstart.md) ends with a troubleshooting table keyed by
 the error text you saw — `could not connect`, `ModuleNotFoundError: No module named 'psycopg'`,
 `pgvector = NOT INSTALLED`.
 
@@ -469,7 +469,7 @@ the error text you saw — `could not connect`, `ModuleNotFoundError: No module 
 
 **Early, and unreleased — there is no tag yet; `__version__` is `0.1.0`.** In this version the
 offline path runs end to end; live mode covers part of what it is meant to. Everything under "not
-built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
+built" is carried by the [roadmap](docs/roadmap.md).
 
 | | Built | Not built |
 | --- | --- | --- |
@@ -477,7 +477,7 @@ built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
 | **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the reading of a result that would say a number is off |
 | **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs |
 | **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes, and a front door for a statement you wrote |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 144 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 149 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 ## Known limitations
 
@@ -485,9 +485,8 @@ built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
   one column definition per line, reads a closed set of statement kinds, and copies a
   dollar-quoted body whole without parsing it: every statement it does not claim is listed by
   position, and a file where it claims nothing exits 2 from the review command rather than
-  reporting zero findings. The schema audit is the exception: `python demo.py --source` prints
-  `0 finding(s)` over the same file, which is the same failure one command over, and the fix is on
-  the [roadmap](docs/roadmap.md) (Chinese). The SQL-side checks read a single
+  reporting zero findings. The schema audit does the same: a file that defines no table stops at
+  `[nothing to audit]` and exits 2. The SQL-side checks read a single
   query level and abstain, with a note, on anything nested, unparsable or ambiguous. Production
   should parse with `sqlglot` or `pg_query`; it is dependency-free on purpose, so
   `python demo.py` runs on a fresh clone with no install.
@@ -497,7 +496,7 @@ built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
 - **A rule file configures the reviewer, not the fence.** What a pack may change is the layer
   that reads and reports. The seven guardrail layers decide, and they stay code: a fence a committed
   JSON can switch off is not a fence. Its table whitelist and row cap are configuration, its
-  decision logic is not. The [roadmap](docs/roadmap.md) (Chinese) keeps that as a requirement
+  decision logic is not. The [roadmap](docs/roadmap.md) keeps that as a requirement
   rather than a setting.
 - **The eval harness is a ruler under revision.** Each question accepts a set of sources (`甲 / 乙`),
   but it is still one rank against that set, so read the per-question table before the headline.
@@ -518,17 +517,20 @@ built" is carried by the [roadmap](docs/roadmap.md) (Chinese).
   fixed: L3 no longer refuses a column aliased `comment`, and a `LIMIT` nested in a subquery no
   longer exempts a statement from the outer cap. What is left is the wiring, plus the decision it
   needs — the cap defaults to 100 rows while a catalog read wants all of them, so `max_rows` has to
-  be set per read, or a table with more than a hundred columns loses the rest. Making every live
-  read pass the one gate is on the [roadmap](docs/roadmap.md) (Chinese).
+  be set per read, or a table with more than a hundred columns loses the rest. One spelling still
+  gets a second clause appended: `FETCH FIRST n ROWS ONLY` is not read as a limit, and PostgreSQL
+  does not allow `FETCH FIRST` and `LIMIT` in the same statement, so the statement is refused. It
+  fails closed, but it is a false refusal. Making every live
+  read pass the one gate is on the [roadmap](docs/roadmap.md).
 
 ## FAQ
 
 **It printed `0 finding(s)`. Did my script pass?**
-Check the exit code first. `python -m schemafence.review` exits **0** when it read the file and
-nothing fired, **1** when something fired, and **2** when it could not review — a pack that failed
-its own examples, or a file where the reader recognised nothing at all. The schema audit is the
-exception: `python demo.py --source <file>` still prints `0 finding(s)` over a file it read nothing
-of. That one is on the [roadmap](docs/roadmap.md) (Chinese) and is not fixed yet.
+Then it read the file and nothing fired. Check the exit code anyway: `python -m schemafence.review`
+exits **0** for that case, **1** when something fired, and **2** when it could not review — a pack
+that failed its own examples, or a file where the reader recognised nothing at all. `python demo.py
+--source` follows the same rule: a file that defines no table stops at `[nothing to audit]` and
+exits 2 rather than reporting zero findings.
 
 **A rule pack says `WAS NOT APPLIED`. Why?**
 The pack names the facts it needs, and a run that did not read them is refused rather than reported

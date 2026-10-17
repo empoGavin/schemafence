@@ -16,7 +16,7 @@
 | 问一个运维手册里写着答案的问题 | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
 | 诊断一套活库 | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
 | 全离线跑一遍：不要库，也不要 key | `python demo.py` | 除了活库那几处读，上面全都有 |
-| 跑回归门禁 | `python tests/qa_probe.py` | 144 例 |
+| 跑回归门禁 | `python tests/qa_probe.py` | 149 例 |
 | 查一条被人说「数字不对」的查询 | **还没有命令** | 将来是 `checks_sql.py` |
 | 把一条你自己写的语句交给闸门 | **还没有命令** | 将来是 `guard.py` |
 | 跑一次诊断，并把这次的结果留下 | **还没有命令** | 将来是 `snapshot.py` → `checks.py` → 一个存放历次运行的存储 |
@@ -54,7 +54,7 @@ Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、�
 | --- | --- |
 | `demo.py` | 审一份 schema，并跑自检。默认离线，加 `--db` 才有活库那几处读。 |
 | `agent_cli.py` | `--ingest`、`--ask`、`--eval`、`--tune`、`--genq`、`--report`。 |
-| `tests/qa_probe.py` | 144 条离线用例，包括不让规则包悄悄长胖的那几道合并门禁，和让文档里引用的数字保持诚实的文档检查。 |
+| `tests/qa_probe.py` | 149 条离线用例，包括不让规则包悄悄长胖的那几道合并门禁，和让文档里引用的数字保持诚实的文档检查。 |
 | `scripts/` | 语料转换器、pgvector 灌库、三组基准与基准报告的生成器、`setup_pg.sh`、`test_layers.py`。 |
 | `rules/` | 随仓库发的三个规则包：`table-hygiene`、`change-review`、`index-hygiene`。 |
 

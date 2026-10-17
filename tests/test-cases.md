@@ -11,7 +11,7 @@
 
 | 维度 | 用例数 | 首跑失败 | 修复后 |
 |---|---|---|---|
-| A. guard 闸门 | 25 | 4（A21–A24） | 25 PASS |
+| A. guard 闸门 | 34 | 4（A21–A24） | 34 PASS |
 | B. 路由 | 8 | 0 | 8 PASS |
 | C. 知识检索 | 12 | 1（C7） | 12 PASS |
 | D. CLI 行为 | 19 | 4（D14–D17） | 19 PASS |
@@ -20,12 +20,15 @@
 | G. 产物完整性 | 5 | 1（G5，总数字段未回填） | 5 PASS |
 | H. 规模语料生成器 | 4 | 0 | 4 PASS |
 | I. 隔离子进程 | 2 | 0 | 2 PASS |
-| J. SQL 语义检查 | 11 | 0 | 11 PASS |
+| J. SQL 语义检查 | 12 | 0 | 12 PASS |
 | K. 规则包 | 10 | 0 | 10 PASS |
 | L. 规则推断与事实归一 | 12 | 1（L0 首跑断言写错） | 12 PASS |
 | M. 活库事实与索引归一 | 10 | 1（M1 首跑断言写错） | 10 PASS |
-| N. 文档（链接、数字、措辞、版本） | 4 | 0 | 4 PASS |
-| **合计** | **133** | **12** | **133 PASS** |
+| N. 文档（链接、数字、措辞、版本、语言、横幅） | 10 | 0 | 10 PASS |
+| **合计** | **149** | **12** | **149 PASS** |
+
+「首跑失败」一列记的是最初那一轮的结果。A25–A33、J11、N5–N10 是之后几轮补的，
+各自也都先红后绿（闸门缺陷、文档语言统一、小洞清理三批），细节见各节。
 
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
@@ -84,6 +87,9 @@ N1–N3 随「对外文档合并、并把文档里的数字改成现算」一起
 | A28 | 顶层 LIMIT + OFFSET 不动 | 无 | `guard("SELECT * FROM shop.orders LIMIT 5 OFFSET 2")` | `ok=True`, `rewritten=False` | `rewritten=False` | PASS |
 | A29 | 两条 catalog 读过闸门 | 无 | `guard(TABLES_SQL)`、`guard(COLUMNS_SQL)` | 都 `ok=True` | 修复前两条都 `layer=L3 forbidden keyword: COMMENT`（FAIL） | PASS |
 | A30 | catalog 读拿到外层上限 | 无 | `guard(COLUMNS_SQL)` | `ok=True`, `sql` 含 `LIMIT 100` | 修复前 `ok=False`（FAIL）→ 修复后带 `LIMIT 100` | PASS |
+| A31 | 超上限 LIMIT 被收紧 | 无 | `guard("SELECT * FROM shop.orders LIMIT 100000")` | `ok=True`, `rewritten=True`, `sql` 含 `LIMIT 100` 且不含 `100000` | 修复前 `rewritten=False`（FAIL）→ 修复后 `LIMIT 100` | PASS |
+| A32 | `LIMIT ALL` 改写成上限 | 无 | `guard("SELECT * FROM shop.orders LIMIT ALL")` | `ok=True`, `rewritten=True`, LIMIT 只出现一次 | 修复前会追加出第二条 LIMIT（FAIL）→ 修复后单条 `LIMIT 100` | PASS |
+| A33 | 字符串里的 LIMIT 不动 | 无 | `guard("SELECT 'LIMIT 5000' AS s")` | 字面量原样，尾部补 `LIMIT 100` | `SELECT 'LIMIT 5000' AS s` + `LIMIT 100` | PASS |
 
 ## B. 路由（写请求 vs 疑问句）
 
@@ -236,6 +242,7 @@ H3 的存在理由：基准会**照单全收目录里的文件**。若小规模�
 | J8 | 弃权 | 两张表同名列 | `SUM(amount)` 跨 `s.a` / `s.b` | 无 finding，note 报归属数 | `SUM(amount) belongs to 2 tables ...` | PASS |
 | J9 | 边界 | 同上 | `DELETE FROM shop.orders WHERE id = 1` | 语义层 0 finding（它不裁决），`guard()` 仍拦 | `guard_ok=False findings=0` | PASS |
 | J10 | demo 接线 | 无 | `python demo.py` | `rc=0`，输出含 `[sql-checks]` 与 `12 cases → all passed` | `rc=0` | PASS |
+| J11 | 没有表就不算通过 | 一份只有 `\copy` 与 `VACUUM FULL;` 的脚本 | `python demo.py --source no-tables.sql` | `rc=2`，打印 `[nothing to audit]`，**不打印 `0 finding(s)`** | 修复前 `rc=0` 且打了 `0 finding(s)`（FAIL）→ 修复后 `rc=2` | PASS |
 
 J4/J5/J6 是这一层最容易被写坏的三个反例：**膨胀侧自己的度量不算被膨胀**、
 **已经按子表粒度聚合的不算被膨胀**、**连接键唯一的不算膨胀**。J8 与 J9 是两条纪律：

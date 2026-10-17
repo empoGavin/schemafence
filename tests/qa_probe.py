@@ -213,6 +213,20 @@ def guard_cases() -> None:
     check("A30", "the column read gets its outer cap from the guard",
           columns_read.ok and "LIMIT 100" in columns_read.sql,
           columns_read.sql[-40:])
+    # A top-level LIMIT can ask for more rows than the cap allows, and ALL is
+    # the same request spelled differently.
+    capped = guard("SELECT * FROM shop.orders LIMIT 100000")
+    check("A31", "L6 brings a top-level LIMIT above the cap down to it",
+          capped.ok and capped.rewritten and "LIMIT 100" in capped.sql
+          and "100000" not in capped.sql, capped.sql[-30:])
+    every = guard("SELECT * FROM shop.orders LIMIT ALL")
+    check("A32", "L6 turns LIMIT ALL into the cap instead of adding a second LIMIT",
+          every.ok and every.rewritten and every.sql.upper().count("LIMIT") == 1
+          and "LIMIT 100" in every.sql, every.sql[-30:])
+    literal = guard("SELECT 'LIMIT 5000' AS s")
+    check("A33", "L6 leaves a LIMIT inside a string literal alone",
+          literal.ok and "LIMIT 5000" in literal.sql and "LIMIT 100" in literal.sql,
+          literal.sql)
 
 
 # --------------------------------------------------------------------------- #
@@ -734,6 +748,16 @@ def sql_semantics_cases() -> None:
           and "12 cases → all passed" in p.stdout,
           f"rc={p.returncode} block={'yes' if '[sql-checks]' in p.stdout else 'no'} "
           f"count={'yes' if '12 cases → all passed' in p.stdout else 'no'}")
+
+    barren = TMP / "no-tables.sql"
+    barren.write_text("\\copy shop.orders from 'x.csv'\nVACUUM FULL;\n", encoding="utf-8")
+    p = subprocess.run([PY, str(ROOT / "demo.py"), "--source", str(barren)],
+                       capture_output=True, text=True, cwd=str(ROOT),
+                       env=child_env(), timeout=120)
+    check("J11", "a source with nothing to audit is reported, not passed as clean",
+          p.returncode == 2 and "0 finding(s)" not in p.stdout,
+          f"rc={p.returncode} clean_line="
+          f"{'present' if '0 finding(s)' in p.stdout else 'absent'}")
 
 
 def rulepack_cases() -> None:
@@ -1517,6 +1541,15 @@ def doc_cases() -> None:
     check("N9", "the README is written in English and every doc under docs/ is written in "
                 "Chinese, code blocks and example data aside",
           not trouble, "; ".join(trouble[:4]) if trouble else "one language per side")
+
+    banner = re.search(r'print\("(schemafence [^"]+)"\)',
+                       (ROOT / "demo.py").read_text(encoding="utf-8"))
+    absent = [name for name in ("README.md", "docs/quickstart.md")
+              if banner and banner.group(1) not in (ROOT / name).read_text(encoding="utf-8")]
+    check("N10", "the banner demo.py prints is the one the docs quote back",
+          banner is not None and not absent,
+          f"not quoted in {absent}" if absent else
+          (banner.group(1) if banner else "demo.py prints no banner"))
 
 
 def main() -> int:

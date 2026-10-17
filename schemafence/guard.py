@@ -57,7 +57,7 @@ WRITE_CLAUSE = re.compile(
 TABLE_REF = re.compile(
     r"\b(?:FROM|JOIN)\s+([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)", re.IGNORECASE
 )
-HAS_LIMIT = re.compile(r"\blimit\s+\d+", re.IGNORECASE)
+LIMIT_CLAUSE = re.compile(r"\blimit\s+(\d+|all)\b", re.IGNORECASE)
 
 SESSION_SQL = [
     "SET default_transaction_read_only = on",
@@ -113,23 +113,67 @@ def _sanitize(sql: str) -> str:
     return " ".join("".join(out).split())
 
 
-def _top_level(sql: str) -> str:
-    """The statement with everything inside parentheses dropped.
+def _top_level_mask(sql: str) -> list[bool]:
+    """Mark the characters that stand outside parentheses, literals and comments.
 
-    A LIMIT in a subquery caps that subquery, not the rows this call returns,
-    so it cannot stand in for the caller's own limit.  ``_sanitize`` has
-    already removed string literals, so no parenthesis here is inside text.
+    A LIMIT counts as the caller's own only inside that region: one in a
+    subquery bounds the subquery, and one in a string is data.
     """
-    out: list[str] = []
-    depth = 0
-    for ch in sql:
+    mask = [False] * len(sql)
+    depth, i, n = 0, 0, len(sql)
+    in_quote = False
+    while i < n:
+        ch = sql[i]
+        if in_quote:
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    i += 2
+                    continue
+                in_quote = False
+            i += 1
+            continue
+        if ch == "'":
+            in_quote = True
+            i += 1
+            continue
+        if sql.startswith("--", i):
+            j = sql.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if sql.startswith("/*", i):
+            j = sql.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
         if ch == "(":
             depth += 1
         elif ch == ")":
             depth = max(0, depth - 1)
         elif depth == 0:
-            out.append(ch)
-    return "".join(out)
+            mask[i] = True
+        i += 1
+    return mask
+
+
+def _top_level(sql: str) -> str:
+    """The statement with everything inside parentheses and literals dropped."""
+    return "".join(ch for ch, keep in zip(sql, _top_level_mask(sql)) if keep)
+
+
+def _cap_top_limit(sql: str, max_rows: int) -> tuple[str, bool]:
+    """Bring a top-level LIMIT down to the cap; a smaller one stays as written.
+
+    ``LIMIT ALL`` asks for every row, so it is rewritten too.  Leaving it
+    alone would be worse than useless: no cap would apply, and appending one
+    would leave the statement with two LIMIT clauses and a syntax error.
+    """
+    mask = _top_level_mask(sql)
+    top = [m for m in LIMIT_CLAUSE.finditer(sql) if mask[m.start()]]
+    if not top:
+        return sql, False
+    asked = top[-1]
+    if asked.group(1).lower() != "all" and int(asked.group(1)) <= max_rows:
+        return sql, False
+    return sql[:asked.start(1)] + str(max_rows) + sql[asked.end(1):], True
 
 
 def guard(sql: str, *, max_rows: int = 100, table_whitelist=None,
@@ -185,9 +229,12 @@ def guard(sql: str, *, max_rows: int = 100, table_whitelist=None,
 
     body = raw.rstrip().rstrip(";").strip()
     final_sql = body
-    if not HAS_LIMIT.search(_top_level(clean_body)):
+    if not LIMIT_CLAUSE.search(_top_level(body)):
         final_sql = f"{body}\nLIMIT {max_rows}"
         result.rewritten = True
+    else:
+        final_sql, capped = _cap_top_limit(body, max_rows)
+        result.rewritten = capped
     result.sql = final_sql
 
     result.ok = True

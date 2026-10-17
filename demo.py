@@ -204,7 +204,7 @@ def main(argv=None) -> int:
                         help="exit non-zero if a finding at this level or above exists")
     args = parser.parse_args(argv)
 
-    print("schemafence — a read-only DBA agent, a reviewer, and a fence")
+    print("schemafence — a read-only diagnostic agent, a reviewer, and a fence")
     rule("=")
 
     source = Path(args.source)
@@ -216,6 +216,13 @@ def main(argv=None) -> int:
     print(f"source : {source.name}")
     print(f"tables : {len(schema.tables)}      columns : {schema.column_count}")
     print("mode   : offline (no database, no model, no API key)")
+
+    if not schema.tables:
+        heading("[nothing to audit]")
+        print(f"  {source.name} defines no table, so the checks have no schema to read.")
+        print("  A script that only loads data or changes settings is reviewed statement")
+        print("  by statement: python -m schemafence.review --rules <pack> <file>")
+        return 2
 
     findings = analyze(schema)
     show_findings(findings)

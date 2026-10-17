@@ -210,7 +210,7 @@ cd ~/schemafence && python3 demo.py
 你应该看到（节选）：
 
 ```
-schemafence — a read-only DBA agent, a reviewer, and a fence
+schemafence — a read-only diagnostic agent, a reviewer, and a fence
 ====================================================================
 source : sample_schema.sql
 tables : 7      columns : 33
