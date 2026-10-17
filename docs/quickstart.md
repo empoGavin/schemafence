@@ -275,12 +275,19 @@ python3 demo.py --ask "哪个表存了退款信息？"
 
 ```bash
 python -m schemafence.review --rules rules/table-hygiene.json \
-       --rules rules/change-review.json --ddl examples/change_script_review.sql
+       --rules rules/change-review.json --script examples/change_script_review.sql
 ```
 
 退出码是这条命令在流水线里的意义：**0** 读过且干净、**1** 读过且至少一条规则命中、
-**2** 审不了（规则包没过自己的用例，或者文件里什么都没认出来）。第三个码存在的意义是：
-「0 finding(s)」永远不会打印在一个没人看懂的文件上。
+**2** 审不了（规则包没过自己的用例，文件里什么都没认出来，或者一条规则都没命名到任何行 ——
+零行不等于通过）。第三个码存在的意义是：「0 finding(s)」永远不会打印在一个没人看懂的文件上。
+
+`--script` 也可以给一个目录，或者重复给多次。多份时每份一行、只有带 finding 的才展开，
+退出码按整批算：任一判不了 → 2，否则任一命中 → 1，否则 0。
+
+```bash
+python -m schemafence.review --script sql/2026-10/
+```
 
 ### 2.5 故意让护栏拦一次
 
@@ -550,7 +557,7 @@ python demo.py --db postgresql://postgres:pgvec123@localhost:5432/fence_demo
 脚本知道自己要建的索引，但「这张表上是不是已经有了」只有库知道：
 
 ```bash
-python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql
+python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --script release.sql
 ```
 
 不带 `--db` 直接跑，它会**拒绝执行**而不是报干净 —— 规则包声明了它需要 catalog 的事实，

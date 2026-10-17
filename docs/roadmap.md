@@ -109,7 +109,7 @@ net_sales:
 | **R3** | 行数远远超出预期 | `check 5`，然后第 2 层 | `check 5` 回答一个问题，且需要活库连接。它的完成形态是 R14：同一个问题问整份结果，而不是只问行数。 |
 | **R4** | 一条审核规则是「一句描述 + 它的例子」，不是代码 | `schemafence/rulepack.py`、`schemafence/facts.py`、`rules/*.json` | **done** —— 事实注册表、词表、`--infer` 和重叠检查都在下面 |
 | **R5** | B 类错误，不只是 A 类 | `checks_sql.py`，然后第 3 层 | S2、S4、S5、S6，以及反例那一层。 |
-| **R6** | 一份变更脚本按它做的动作来判，不按它留下的 schema 判 | `ddl.py`、规则包 | **done** —— `ALTER`、`DROP`、`CREATE INDEX`、`COMMENT ON`、DML 和会话语句都按动作读；读取器没有认领的每条语句按位置列出来；词表没有声明的变更种类会被报出来而不是悄悄产出；一个什么都产不出来的文件退出码是 2。同一趟还把主键的四种写法塌成一条事实，规则才盖得住全部四种 |
+| **R6** | 一份变更脚本按它做的动作来判，不按它留下的 schema 判 | `ddl.py`、规则包 | **done** —— `ALTER`、`DROP`、`CREATE INDEX`、`COMMENT ON`、DML 和会话语句都按动作读；读取器没有认领的每条语句按位置列出来；词表没有声明的变更种类会被报出来而不是悄悄产出；一个什么都产不出来的文件退出码是 2。同一趟还把主键的四种写法塌成一条事实，规则才盖得住全部四种。**补**：`dml` 分成 `insert`/`update`/`delete`/`truncate` 四种，每条动作带 `has_where`（只看顶层，子查询里的不算），规则才拦得住「没有 WHERE 的 UPDATE/DELETE」与 `TRUNCATE`；一条规则都没命名到任何行的文件，退出码同样是 2 —— 零行不等于通过（`tests/qa_probe.py` P1–P8、P13） |
 | **R7** | 闸门的规则集可配 | `guard.py` | 七层是代码。 |
 | **R8** | 规则能对语句生效，不只对 schema 生效 | 一个 SQL 事实模型 | `checks_sql.py` 手里有它要的事实（FROM 链、连接键、唯一性），但没有把它们导成行，所以到今天为止写出来的规则读的都是 DDL。 |
 | **R9** | 一条需要「库里已经有什么」的规则 | 一个 `catalog` 事实模型、`pg_index` | **done** —— `rules/index-hygiene.json` 拒收一份脚本、要求 `--db`；行形状由 `tests/qa_probe.py` M1 与脚本读取器保持一致。这条查询本身需要一个服务器才能跑通。 |
@@ -119,6 +119,7 @@ net_sales:
 | **R13** | 这个项目对活库做的每一处读都过同一道闸门 | `snapshot.py`、`guard.py` | 没做 —— 挡路的两处闸门缺陷已经修好：L3 不再把列别名 `comment` 当成 `COMMENT` 语句，`LIMIT` 在两处都收紧了：内层子查询的不再免掉外层上限，顶层超过上限的（含 `LIMIT ALL`）会被改写成上限值（`tests/qa_probe.py` A25–A33 盯着）。剩下的是接线：`snapshot.py` 的五条 catalog 读还是直连 psycopg。接线前要定一件事 —— 闸门默认上限 100 行，而 catalog 读要全量，所以 `max_rows` 得按每条读的大小给，否则一张过百列的表只能读到前 100 列。 |
 | **R14** | 对不上的结果是 finding | `checks_sql.py` 旁边的一个新模块 | 没做。两层用同一套判据：离线时从 schema 和统计信息预测，挂上 `--db` 时对着真实结果再核一遍。它吸收 R3 —— R3 是同一个问题，只问行数。活库那一半会走闸门。 |
 | **R15** | 给闸门一扇前门，让一个人写的语句能递进去 | `schemafence/guard.py` | 没做：闸门今天是个库函数。`from schemafence import guard` 够得到它，命令行上没有任何东西够得到。前门是 `--sql` 和 `--file`，退出码 0 允许 / 1 拦住 / 2 什么都没认出来，打印判决、作出判决的那一层，以及为了让这个答案成立、调用方必须执行的会话加固语句。只建前门：决定留在一个纯函数里，所以以后在上面套一个 HTTP 或 MCP 的壳，那是包装而不是第二份实现。 |
+| **R16** | 一次审一批脚本，给一张汇总和聚合退出码 | `schemafence/review.py` | **done** —— `--script` 可重复、也收目录（递归 `*.sql`、按路径排序；`--ddl` 是旧名，仍然可用）。多份时每份一行，只有带 finding 的才展开详情；退出码聚合：任一判不了 → 2，否则任一命中 → 1，否则 0。同一趟修掉两处输入形态的洞：重复 `--ddl` 只审最后一份、传目录直接抛 `PermissionError`（`tests/qa_probe.py` P9–P12）。 |
 
 R3 守着只读这条规矩。读的是 `pg_class.reltuples` 和 `pg_stats`；活库连接不是写连接，所以 `--db` 这条轴
 一直和 key 那几条轴互相独立。
@@ -197,7 +198,7 @@ R4 和 R7 是两条带着约束的需求，因为确定性正是这个项目那�
 python -m schemafence.review --vocabulary > vocabulary.json   # 词表是封闭的
 # 把这个文件、用文字写的规则、两个例子交给模型
 python -m schemafence.review --rules your-pack.json --verify  # 有一个标签不对就拒收
-python -m schemafence.review --rules your-pack.json --ddl colleague.sql
+python -m schemafence.review --rules your-pack.json --script colleague.sql
 ```
 
 模型只在写规则的时候跑，之后再也不跑：审核路径只调求值器。一条规则正是「概率的那一步被冻成确定性的一步」

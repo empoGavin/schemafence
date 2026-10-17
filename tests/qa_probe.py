@@ -38,8 +38,8 @@ from schemafence.guard import guard, run_selftest                # noqa: E402
 from schemafence.knowledge import (Chunk, Embedder, JsonStore,    # noqa: E402
                                    chunk_markdown, ingest_directory)
 from schemafence.rulepack import (find_overlaps, infer_rule,      # noqa: E402
-                                  load_rulepack, review_schema,
-                                  run_rulepack_selftest, vocabulary)
+                                  load_rulepack, review_ddl, review_schema,
+                                  RulePackError, run_rulepack_selftest, vocabulary)
 from schemafence.snapshot import (COLUMNS_SQL, TABLES_SQL,        # noqa: E402
                                   apply_script, build_schema)
 from schemafence.tools import Toolbox, run_tool_selftest          # noqa: E402
@@ -1173,6 +1173,153 @@ def catalogue_cases() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# P. a script that is not only DDL, and a folder of them
+# --------------------------------------------------------------------------- #
+def script_review_cases() -> None:
+    """A release holds UPDATE and DELETE too, and a review is asked for a folder.
+
+    The reader already read those statements as actions, but they all carried
+    the same kind, so no rule could tell an UPDATE from a DELETE and none could
+    ask whether the statement says which rows it changes.  P1 to P8 pin the four
+    kinds, the ``has_where`` reading — top level only, because a WHERE inside a
+    subquery filters that subquery — and the two rules written over them.
+
+    P9 to P12 pin the input shapes a review is actually asked for: one file, a
+    folder, two flags that used to keep only the last one, and a folder with
+    nothing in it.  P13 is the verdict: a pack whose every rule named an empty
+    set checked nothing, and "no rule fired" over it is the same lie as
+    "0 finding(s)" over a file nobody understood.  P14 is the same lie one step
+    earlier — a pack naming a kind the reader never produces.
+    """
+    print("\n[P] review — DML actions, a folder of scripts, and a verdict that adds up")
+
+    def first(script: str, index: int = 0):
+        """The action the reader produced at this position, or None.
+
+        Not a dict keyed by kind: the names are what these cases are about, so
+        a case has to report the name it got rather than raise on it.  A gate
+        that dies on the code it is checking prints no diagnosis at all.
+        """
+        changes = parse_ddl(script).changes
+        return changes[index] if len(changes) > index else None
+
+    update = first("UPDATE shop.orders SET status = 0;")
+    check("P1", "an UPDATE is an action of its own kind",
+          getattr(update, "kind", None) == "update", f"kind={getattr(update, 'kind', None)}")
+
+    filtered = first("UPDATE shop.orders SET status = 0 WHERE id = 1;")
+    check("P2", "an UPDATE carries has_where, and it is false only without a WHERE",
+          getattr(update, "has_where", None) is False
+          and getattr(filtered, "has_where", None) is True,
+          f"no WHERE={getattr(update, 'has_where', None)}, "
+          f"WHERE={getattr(filtered, 'has_where', None)}")
+
+    delete = first("DELETE FROM shop.order_items;")
+    check("P3", "a DELETE is its own kind and carries the same reading",
+          getattr(delete, "kind", None) == "delete"
+          and getattr(delete, "has_where", None) is False,
+          f"{getattr(delete, 'kind', None)}/{getattr(delete, 'has_where', None)}")
+
+    subquery = first("UPDATE shop.orders SET amount = "
+                     "(SELECT max(amount) FROM shop.orders WHERE status = 1);")
+    in_list = first("DELETE FROM shop.order_items "
+                    "WHERE order_id IN (SELECT id FROM shop.orders);")
+    check("P4", "only a top-level WHERE counts: one inside a subquery does not",
+          getattr(subquery, "has_where", None) is False
+          and getattr(in_list, "has_where", None) is True,
+          f"subquery only={getattr(subquery, 'has_where', None)}, "
+          f"top level={getattr(in_list, 'has_where', None)}")
+
+    truncate, insert = (first("TRUNCATE shop.orders;\nINSERT INTO shop.orders (id) VALUES (1);", 0),
+                        first("TRUNCATE shop.orders;\nINSERT INTO shop.orders (id) VALUES (1);", 1))
+    check("P5", "TRUNCATE and INSERT are their own kinds too",
+          getattr(truncate, "kind", None) == "truncate"
+          and getattr(insert, "kind", None) == "insert",
+          f"{getattr(truncate, 'kind', None)}, {getattr(insert, 'kind', None)}")
+
+    pack = load_rulepack(ROOT / "rules" / "change-review.json", verify=False)
+
+    fired = review_ddl([pack], "UPDATE shop.orders SET status = 0;\n"
+                               "DELETE FROM shop.order_items;\n")
+    check("P6", "an UPDATE and a DELETE with no WHERE are both reported",
+          len(fired.findings) == 2
+          and all(f.check == "update-or-delete-needs-a-where" for f in fired.findings),
+          ", ".join(f.subject for f in fired.findings) or "nothing")
+
+    quiet = review_ddl([pack], "UPDATE shop.orders SET status = 0 WHERE id = 1;\n"
+                               "DELETE FROM shop.order_items WHERE order_id = 7;\n"
+                               "INSERT INTO shop.orders (id) VALUES (1);\n")
+    check("P7", "the same two statements with a WHERE, and a plain INSERT, stay silent",
+          not quiet.findings, f"{len(quiet.findings)} finding(s)")
+
+    truncated = review_ddl([pack], "TRUNCATE shop.orders;")
+    filtered_delete = review_ddl([pack], "DELETE FROM shop.orders WHERE id = 1;")
+    check("P8", "TRUNCATE is reported, and a filtered DELETE is not",
+          [f.check for f in truncated.findings] == ["no-truncate"]
+          and not filtered_delete.findings,
+          ", ".join(f.check for f in truncated.findings) or "nothing")
+
+    update_file = TMP / "p-update.sql"
+    update_file.write_text("UPDATE shop.orders SET status = 0;\n", encoding="utf-8")
+    p = review_cli(["--script", str(update_file)])
+    check("P9", "with no --rules, a script is reviewed by every pack that declares ddl",
+          p.returncode == 1 and "update-or-delete-needs-a-where" in p.stdout
+          and "change-review" in p.stdout and "table-hygiene" in p.stdout,
+          f"rc={p.returncode}")
+
+    folder = TMP / "p-folder"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("*.sql"):
+        old.unlink()
+    (folder / "a_update.sql").write_text("UPDATE shop.orders SET status = 0;\n",
+                                         encoding="utf-8")
+    (folder / "b_clean.sql").write_text(
+        "CREATE TABLE shop.b (id BIGSERIAL PRIMARY KEY);\n"
+        "COMMENT ON TABLE shop.b IS '用途: 订单明细; 状态: 在线';\n"
+        "COMMENT ON COLUMN shop.b.id IS '标准: ORD-001';\n", encoding="utf-8")
+    p = review_cli(["--script", str(folder)])
+    check("P10", "a folder is reviewed one file per row, and the codes add up",
+          p.returncode == 1 and "a_update.sql" in p.stdout and "b_clean.sql" in p.stdout
+          and "with findings" in p.stdout,
+          f"rc={p.returncode}")
+
+    p = review_cli(["--ddl", str(folder / "a_update.sql"),
+                    "--ddl", str(folder / "b_clean.sql")])
+    check("P11", "two --ddl flags review two files instead of keeping the last one",
+          p.returncode == 1 and "a_update.sql" in p.stdout and "b_clean.sql" in p.stdout,
+          f"rc={p.returncode}")
+
+    empty = TMP / "p-empty"
+    empty.mkdir(parents=True, exist_ok=True)
+    for old in empty.glob("*.sql"):
+        old.unlink()
+    p = review_cli(["--script", str(empty)])
+    check("P12", "a folder with no script in it is named, not raised",
+          p.returncode == 2 and "no *.sql file under" in p.stdout
+          and "Traceback" not in p.stderr,
+          f"rc={p.returncode} stderr={p.stderr.strip()[:40]!r}")
+
+    query_file = TMP / "p-query.sql"
+    query_file.write_text("SELECT 1;\n", encoding="utf-8")
+    p = review_cli(["--script", str(query_file)])
+    check("P13", "a file no rule could assert on exits 2, and the verdict says why",
+          p.returncode == 2 and "nothing was asserted" in p.stdout
+          and "Every rule named a non-empty set" not in p.stdout,
+          f"rc={p.returncode}")
+
+    retired = dict(pack, rulepack="retired-kind",
+                   rules=[dict(pack["rules"][0], id="old-dml", select={"kind": "dml"})])
+    try:
+        load_rulepack(retired, verify=False)
+        refused, detail = False, "the pack loaded anyway"
+    except RulePackError as exc:
+        refused, detail = "insert" in str(exc), str(exc)[:70]
+    check("P14", "a pack naming a change kind the reader never produces is refused, "
+                 "not left matching no row at all",
+          refused, detail)
+
+
+# --------------------------------------------------------------------------- #
 # N. the docs — the numbers they quote, and the files they point at
 # --------------------------------------------------------------------------- #
 def _split_top(text: str) -> list[str]:
@@ -1567,6 +1714,7 @@ def main() -> int:
     rulepack_cases()
     inference_cases()
     catalogue_cases()
+    script_review_cases()
     doc_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)

@@ -11,12 +11,12 @@
 
 | 你手上这件事 | 命令 | 代码怎么走 |
 | --- | --- | --- |
-| 审一份别人写的脚本 | `python -m schemafence.review --rules rules/*.json --ddl colleague.sql` | `review.py` → `ddl.py` → `facts.py` → `rulepack.py` |
-| 拿同一份脚本对着活库上已有的东西再审一遍 | `python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql` | `snapshot.py` → `facts.py` → `rulepack.py` |
+| 审一份别人写的脚本 | `python -m schemafence.review --rules rules/*.json --script colleague.sql` | `review.py` → `ddl.py` → `facts.py` → `rulepack.py` |
+| 拿同一份脚本对着活库上已有的东西再审一遍 | `python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --script release.sql` | `snapshot.py` → `facts.py` → `rulepack.py` |
 | 问一个运维手册里写着答案的问题 | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
 | 诊断一套活库 | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
 | 全离线跑一遍：不要库，也不要 key | `python demo.py` | 除了活库那几处读，上面全都有 |
-| 跑回归门禁 | `python tests/qa_probe.py` | 149 例 |
+| 跑回归门禁 | `python tests/qa_probe.py` | 163 例 |
 | 查一条被人说「数字不对」的查询 | **还没有命令** | 将来是 `checks_sql.py` |
 | 把一条你自己写的语句交给闸门 | **还没有命令** | 将来是 `guard.py` |
 | 跑一次诊断，并把这次的结果留下 | **还没有命令** | 将来是 `snapshot.py` → `checks.py` → 一个存放历次运行的存储 |
@@ -34,7 +34,7 @@ Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、�
 
 | 文件 | 它做什么 |
 | --- | --- |
-| `ddl.py` | 读一份变更脚本：最后留下哪些表和列、建了哪些索引和键、为此做了哪些动作。同一个东西的各种写法（列上的 `PRIMARY KEY`、写在表体里、写成具名约束、事后 `ALTER TABLE` 加、`CREATE UNIQUE INDEX`）都塌成**一条**记录下来的事实。 |
+| `ddl.py` | 读一份变更脚本：最后留下哪些表和列、建了哪些索引和键、为此做了哪些动作。同一个东西的各种写法（列上的 `PRIMARY KEY`、写在表体里、写成具名约束、事后 `ALTER TABLE` 加、`CREATE UNIQUE INDEX`）都塌成**一条**记录下来的事实。改数据的语句同样按动作读，分成 `insert`、`update`、`delete`、`truncate` 四种，每条带一个 `has_where` —— 只看顶层，子查询里的 `WHERE` 过滤的是那个子查询。 |
 | `snapshot.py` | 从跑着的 PostgreSQL 里读同一批事实：表和列、索引来自 `pg_catalog`，行数估计来自 `pg_class.reltuples`，NULL 比例来自 `pg_stats`。`build_schema()` 是纯函数，所以解析可以离线测；`apply_script()` 把待审脚本建的索引并到库里已有的事实上。 |
 | `facts.py` | 事实注册表：每个事实模型（`ddl`、`schema`、`catalog`）上规则可以选哪些字段，以及产出这些行的 provider。`--vocabulary` 和 `--facts` 都由它生成，所以对着规则写出来的词表不会和跑它的求值器走散。 |
 | `rulepack.py` | 一条审核规则是一个**文件**：对事实的一次选择、一条断言，和证明它的例子。加载时先拿它自己的例子验一遍，不对就拒收。`review_ddl()` 和 `review_schema()`（两条审核路径共用的那一半）以及 `--infer` 都在这里。 |
@@ -45,7 +45,7 @@ Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、�
 | `planner.py` | 问题 → 候选表 → SQL，按关键词。不用模型。 |
 | `agent.py` | 那个循环：挑工具、留证据、作答。手写，没有交给框架。 |
 | `tools.py` | 四个工具 —— `search_docs`、`run_sql`、`explain_sql`、`get_table_stats` —— 和 `Toolbox`：知识这一侧和执行那一侧唯一的交汇点。 |
-| `review.py` | 审脚本用的命令行，外加 `--verify`、`--vocabulary`、`--facts`、`--infer`、`--write`。退出码 0 干净 / 1 规则命中 / 2 审不了。 |
+| `review.py` | 审脚本用的命令行，外加 `--verify`、`--vocabulary`、`--facts`、`--infer`、`--write`。`--script` 收文件、目录或标准输入，可以重复；多份时每份一行、退出码聚合。退出码 0 干净 / 1 规则命中 / 2 审不了（包没被应用、文件没被读懂，或一条规则都没命名到任何行）。 |
 | `__init__.py` | 对外的接口，带签名列出来。 |
 
 前门和测试脚手架：
@@ -54,7 +54,7 @@ Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、�
 | --- | --- |
 | `demo.py` | 审一份 schema，并跑自检。默认离线，加 `--db` 才有活库那几处读。 |
 | `agent_cli.py` | `--ingest`、`--ask`、`--eval`、`--tune`、`--genq`、`--report`。 |
-| `tests/qa_probe.py` | 149 条离线用例，包括不让规则包悄悄长胖的那几道合并门禁，和让文档里引用的数字保持诚实的文档检查。 |
+| `tests/qa_probe.py` | 163 条离线用例，包括不让规则包悄悄长胖的那几道合并门禁，和让文档里引用的数字保持诚实的文档检查。 |
 | `scripts/` | 语料转换器、pgvector 灌库、三组基准与基准报告的生成器、`setup_pg.sh`、`test_layers.py`。 |
 | `rules/` | 随仓库发的三个规则包：`table-hygiene`、`change-review`、`index-hygiene`。 |
 

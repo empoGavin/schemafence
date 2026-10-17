@@ -25,7 +25,8 @@
 | L. 规则推断与事实归一 | 12 | 1（L0 首跑断言写错） | 12 PASS |
 | M. 活库事实与索引归一 | 10 | 1（M1 首跑断言写错） | 10 PASS |
 | N. 文档（链接、数字、措辞、版本、语言、横幅） | 10 | 0 | 10 PASS |
-| **合计** | **149** | **12** | **149 PASS** |
+| P. 批量审核与 DML 动作 | 14 | 1（P7 首跑断言写错） | 14 PASS |
+| **合计** | **163** | **13** | **163 PASS** |
 
 「首跑失败」一列记的是最初那一轮的结果。A25–A33、J11、N5–N10 是之后几轮补的，
 各自也都先红后绿（闸门缺陷、文档语言统一、小洞清理三批），细节见各节。
@@ -33,6 +34,8 @@
 C11、C12、D19 是后来补的，随 `--rebuild` 与孤儿 source 检测一起进来（见 §C 与 §D 末尾）。
 I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来（见 §I）。
 J0–J10 随 `checks_sql.py` 一起进来（见 §J）。
+P1–P14 随「批量审核与 DML 动作」一起进来：`--script` 收文件/目录、退出码聚合、
+DML 拆成四种动作并带 `has_where`，以及「一条规则都没断言到任何行 → 退出码 2」（见 §P）。
 K0–K9 随规则包（`schemafence/rulepack.py`、`rules/*.json`、`python -m schemafence.review`）
 一起进来（见 §K）。
 L0–L11 随事实注册表（`schemafence/facts.py`）与 `--infer` 一起进来（见 §L）。L0 首跑是
@@ -417,6 +420,36 @@ N2 与 N4 都是这一节的牙齿，N3 也有齿，都是先看见真事故（�
 
 **这一节没验的**：程序输出块里的其余数字（`16 finding(s)`、`13 cases`、报告里那些分数）。
 它们要真跑一遍再逐行比对，属于手工动作，本表不含。
+
+## P. 批量审核与 DML 动作（一份脚本不只有 DDL）
+
+前置：`python -m schemafence.review`（P1–P8 也可在 `tests/qa_probe.py` 的
+`script_review_cases()` 中直接调 `parse_ddl` / `review_ddl`）。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| P1 | 动作种类 | 无 | `parse_ddl("UPDATE shop.orders SET status = 0;")` | 第一条动作 `kind="update"` | `kind=update` | PASS |
+| P2 | `has_where` | 无 | 同上，与 `... WHERE id = 1;` 对比 | 无 WHERE → `False`，有 WHERE → `True` | `False` / `True` | PASS |
+| P3 | 动作种类 | 无 | `parse_ddl("DELETE FROM shop.order_items;")` | `kind="delete"`, `has_where=False` | `delete/False` | PASS |
+| P4 | 顶层判据 | 无 | `UPDATE t SET amount = (SELECT max(amount) FROM t WHERE status = 1)`；`DELETE … WHERE id IN (SELECT …)` | 前者 `False`（子查询里的 WHERE 不算），后者 `True` | `subquery only=False, top level=True` | PASS |
+| P5 | 动作种类 | 无 | `TRUNCATE shop.orders;` + `INSERT INTO …` | 两条分别是 `truncate` 与 `insert` | `insert, truncate` | PASS |
+| P6 | 规则命中 | `change-review` 包 | 无 WHERE 的 UPDATE + DELETE | 2 条 finding，规则均为 `update-or-delete-needs-a-where` | `shop.order_items, shop.orders` | PASS |
+| P7 | 规则沉默 | `change-review` 包 | 带 WHERE 的 UPDATE / DELETE + 一条 `INSERT` | 0 条 finding | `0 finding(s)` | PASS |
+| P8 | 规则命中/沉默 | `change-review` 包 | `TRUNCATE shop.orders;`；`DELETE … WHERE id = 1;` | 前者 1 条 `no-truncate`，后者 0 条 | `no-truncate` / 0 | PASS |
+| P9 | 默认包 | 无 `--rules` | `review --script p-update.sql` | 默认跑全部 `applies_to` 含 `ddl` 的包，rc=1 | `rc=1`，两个包都在 | PASS |
+| P10 | 目录批量 | 两份脚本（一份有问题） | `review --script p-folder/` | 每份一行、两份都列出、聚合 rc=1 | `rc=1` | PASS |
+| P11 | 重复标志 | 两份脚本 | `review --ddl a --ddl b` | 两份都审（改前只留最后一份） | `rc=1`，两份都在表里 | PASS |
+| P12 | 空目录 | 无 `*.sql` 的目录 | `review --script p-empty/` | rc=2，打印 `no *.sql file under`，不抛栈 | `rc=2 stderr=''` | PASS |
+| P13 | 假通过 | 一份只有 `SELECT 1;` 的脚本 | `review --script p-query.sql` | rc=2，打印 `nothing was asserted`，不再说「每条规则都命名了非空集」 | `rc=2` | PASS |
+| P14 | 退役 kind | 包里写 `select.kind = "dml"` | `load_rulepack(pack)` | 抛 `RulePackError`，并列出可用 kind | 报出 `['dml']` 与已知种类 | PASS |
+
+「先红」怎么验的：把这一节的用例原样放到改前那次提交（`1baef91`）的干净检出上跑，
+**13/14 失败**（P7 是「应当沉默」的反例，改前也沉默，属正常）。失败信息都带上了旧值，
+例如 P1 报 `kind=dml`、P11 报 `rc=0`（只审了最后一份）、P14 报「the pack loaded anyway」。
+
+P7 首跑失败是**用例自己写错**：除了「0 条 finding」，还多断言了 `asserted >= 1`，
+而这三条语句本来就没有任何规则可断言（带 WHERE 的 UPDATE/DELETE 不落在选择集里）。
+沉默就是沉默，不能顺手要求它同时「断言过什么」。
 
 ## 已知约定核对
 

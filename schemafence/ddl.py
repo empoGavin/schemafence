@@ -175,11 +175,17 @@ class Table:
 CHANGE_KINDS = (
     "create_table", "add_column", "drop_column", "alter_column", "alter_table",
     "add_constraint", "drop_constraint", "create_index", "drop_index", "drop_table",
-    "rename", "comment", "dml", "grant", "session", "other_ddl",
+    "rename", "comment", "insert", "update", "delete", "truncate",
+    "grant", "session", "other_ddl",
 )
 # `alter_table` fell outside this tuple for one commit: the reader produced it
 # and a rule written against it was refused by the vocabulary, so the rule could
 # never fire.  `_check_kinds` below is what stops that happening quietly again.
+#
+# `dml` was one kind until a rule needed to tell an UPDATE from a DELETE.  Four
+# kinds cost nothing and are the thing a reviewer names: `insert`, `update`,
+# `delete`, `truncate`.  A pack written against `dml` is refused when it loads
+# rather than left matching no row at all.
 
 
 @dataclass
@@ -198,6 +204,7 @@ class Change:
     detail: str = ""                   # what the statement does, in one line
     statement: str = ""                # the statement as written, whitespace collapsed
     position: int = 0                  # 1-based position in the script
+    has_where: bool = False            # a WHERE at the top level of this statement
 
     @property
     def subject(self) -> str:
@@ -539,6 +546,60 @@ def _split_statements(text: str) -> list[str]:
         i += 1
     out.append("".join(buf).strip())
     return [s for s in out if s]
+
+
+def _top_level_text(statement: str) -> str:
+    """The statement with string literals and parenthesised spans removed.
+
+    What is left is the part of the statement that speaks for its own rows.  A
+    ``WHERE`` inside a subquery filters that subquery, and a ``WHERE`` inside a
+    literal is text; neither one narrows the rows this statement touches, so
+    neither counts as the statement being filtered.  Dropping the parenthesised
+    text also drops the parentheses, which is why depth is tracked here rather
+    than counted afterwards.
+
+    A dollar-quoted body is skipped the same way the statement splitter skips
+    it.  Nothing else is parsed: this is a text question, and the answer it
+    gives is only ever read by a rule that says "this action has no WHERE".
+    """
+    out: list[str] = []
+    depth, i, n = 0, 0, len(statement)
+    while i < n:
+        ch = statement[i]
+        if ch in "'\"":
+            j = i + 1
+            while j < n:
+                if statement[j] == ch:
+                    if j + 1 < n and statement[j + 1] == ch:
+                        j += 2                     # '' inside a literal is one quote
+                        continue
+                    j += 1
+                    break
+                j += 1
+            i = j
+            continue
+        if ch == "$":
+            j = _skip_dollar(statement, i)
+            if j is not None:
+                i = j
+                continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _has_where(statement: str) -> bool:
+    """Whether a WHERE at the top level of this statement narrows its own rows."""
+    return re.search(r"\bWHERE\b", _top_level_text(statement), re.IGNORECASE) is not None
+
+
+_DML_LABEL = {"insert": "INSERT INTO", "update": "UPDATE",
+              "delete": "DELETE FROM", "truncate": "TRUNCATE"}
 
 
 def _excerpt(statement: str, limit: int = 96) -> str:
@@ -884,10 +945,13 @@ def _read_statement(schema: Schema, statement: str, position: int) -> bool:
 
     m = _DML.match(statement)
     if m:
+        kind = m.group(1).upper().split()[0].lower()
+        table = _norm(m.group(2))
         schema.changes.append(Change(
-            kind="dml", table=_norm(m.group(2)), column=None,
-            detail=f"{' '.join(m.group(1).upper().split())} on {_norm(m.group(2))}",
-            statement=_excerpt(statement), position=position))
+            kind=kind, table=table, column=None,
+            detail=f"{_DML_LABEL[kind]} {table}",
+            statement=_excerpt(statement), position=position,
+            has_where=_has_where(statement)))
         return True
 
     if _GRANT.match(statement):

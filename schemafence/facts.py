@@ -175,6 +175,7 @@ def _change_rows(schema: Schema) -> list[dict]:
         "detail": c.detail,
         "statement": c.statement,
         "position": c.position,
+        "has_where": c.has_where,
     } for c in schema.changes]
 
 
@@ -290,6 +291,7 @@ CHANGE_FIELDS = {
     "detail": "str",
     "statement": "str",
     "position": "int",
+    "has_where": "bool",               # a WHERE that narrows this action's own rows
 }
 INDEX_FIELDS = {
     "name": "str",

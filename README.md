@@ -77,7 +77,7 @@ To review a script somebody else wrote, with the rules in the repo and nothing e
 
 ```bash
 python -m schemafence.review --rules rules/table-hygiene.json \
-       --rules rules/change-review.json --ddl examples/change_script_review.sql
+       --rules rules/change-review.json --script examples/change_script_review.sql
 ```
 
 ## What it will do to your database, and what it will not
@@ -254,14 +254,14 @@ route is the next section.
 python -m schemafence.review --vocabulary > vocabulary.json   # the closed vocabulary
 python -m schemafence.review --rules rules/table-hygiene.json --verify
 python -m schemafence.review --rules rules/table-hygiene.json \
-       --rules rules/change-review.json --ddl examples/change_script_review.sql
+       --rules rules/change-review.json --script examples/change_script_review.sql
 ```
 
 ```
 schemafence review — a rule pack, and a script somebody else wrote
 ======================================================================
 rules  : table-hygiene            (5 rules, 14 examples verified)   table-hygiene.json
-rules  : change-review            (3 rules, 10 examples verified)   change-review.json
+rules  : change-review            (5 rules, 20 examples verified)   change-review.json
 script : change_script_review.sql
 read   : 9 statement(s) → 3 table(s), 5 column(s), 9 change action(s)
 
@@ -275,6 +275,8 @@ what each rule looked at
   column-comment-cites-standard               column        1      0
   no-drop-table                               change        1      1
   no-drop-column                              change        1      1
+  update-or-delete-needs-a-where              change        0      0   (nothing matched)
+  no-truncate                                 change        0      0   (nothing matched)
   new-not-null-column-needs-a-default         column        1      1
 
   a rule that matched nothing asserted nothing. That is visible here
@@ -323,7 +325,7 @@ pack is held to:
 ```bash
 python -m schemafence.review --infer examples/rule-request-primary-key.json --limit 1 \
        --write primary-key.json
-python -m schemafence.review --rules primary-key.json --ddl colleague.sql   # already usable
+python -m schemafence.review --rules primary-key.json --script colleague.sql   # already usable
 ```
 
 The five silent examples are the point. They are one requirement written four ways — `PRIMARY KEY`
@@ -350,9 +352,18 @@ the fact provider rather than at the rule file.
 
 The two `...` gaps stand for lines left out of the output above. The exit code is the part that
 matters in a pipeline: **0** read and clean, **1** read and at least one rule fired,
-**2** could not review — a pack that failed its own examples, or a file where the reader
-recognised nothing at all. The third code exists so that "0 finding(s)" can never be printed
-over a file nobody understood.
+**2** could not review — a pack that failed its own examples, a file where the reader recognised
+nothing at all, or a run in which every rule named an empty set of rows and so asserted nothing.
+The third code exists so that "0 finding(s)" can never be printed over a file nobody understood,
+and it covers the same failure one level down: a rule with no row to judge has not passed anything.
+
+Give `--script` a file or a folder, and repeat it as often as you like. Several files come back
+as one row each and a single exit code for the run — 2 if any file could not be reviewed, else 1
+if any rule fired, else 0 — which is what a release check actually needs:
+
+```bash
+python -m schemafence.review --script sql/2026-10/
+```
 
 ### A rule that needs the live database
 
@@ -363,7 +374,7 @@ pack says so in its first three lines, and a run that did not read a catalog is 
 reported clean:
 
 ```bash
-python -m schemafence.review --rules rules/index-hygiene.json --ddl colleague.sql
+python -m schemafence.review --rules rules/index-hygiene.json --script colleague.sql
 ```
 
 ```
@@ -396,7 +407,7 @@ which is about the state *after* the migration: the catalog holds the indexes al
 table, the script holds the one about to be added, and neither knows both.
 
 ```bash
-python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --ddl release.sql
+python -m schemafence.review --rules rules/index-hygiene.json --db "$PG_DSN" --script release.sql
 ```
 
 The list of spellings comes from the corpus: every way of writing an index or a key that the
@@ -409,7 +420,7 @@ one level down: a fact has one shape, however it was written, and a rule names t
 **What is checked offline about that read:** the same eighteen fields are built from catalog rows
 and from a script, field for field, in `tests/qa_probe.py` M1, so a rule cannot tell which of the
 two it is reading. The `pg_index` query itself needs a server to exercise:
-`python -m schemafence.review --db "$PG_DSN" --ddl release.sql`, against the instance the
+`python -m schemafence.review --db "$PG_DSN" --script release.sql`, against the instance the
 [quickstart](docs/quickstart.md) sets up.
 
 ### Using it as a library
@@ -473,11 +484,11 @@ built" is carried by the [roadmap](docs/roadmap.md).
 
 | | Built | Not built |
 | --- | --- | --- |
-| **Review a script** | change actions read as actions (16 kinds), 9 rules in three packs, every pack verified against its own examples on load, `--infer` from a description and two scripts | rules over a statement rather than a schema |
+| **Review a script** | change actions read as actions (19 kinds, `has_where` on each), 11 rules in three packs, one script or a whole folder per run, every pack verified against its own examples on load, `--infer` from a description and two scripts | rules over a statement rather than a schema |
 | **Review a statement** | schema checks 1–4; statement checks S1 and S3 | S2/S4/S5/S6, and the reading of a result that would say a number is off |
 | **Diagnose an instance** | live catalogue and `pg_stats` reads; the schema audit | the diagnostic pass, its conclusions, and the memory of earlier runs |
 | **The fence** | seven layers, 13 selftests, session hardening handed to the caller | covering every live read this project makes, and a front door for a statement you wrote |
-| **Around it** | knowledge layer on JSON or pgvector, eval harness, 149 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
+| **Around it** | knowledge layer on JSON or pgvector, eval harness, 163 offline checks, CI on Python 3.10–3.13 | the migration diff, Oracle |
 
 ## Known limitations
 

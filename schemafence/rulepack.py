@@ -306,6 +306,19 @@ def validate_rulepack(pack: dict) -> dict:
         _require(isinstance(select, dict), f"{where}: `select` is an object")
         for key, value in select.items():
             _selector_ok(key, value, FIELDS()[target], where)
+        if target == "change":
+            # A kind the reader never produces selects no row at all, and a rule
+            # that selects no row is silent — which reads exactly like a pass.
+            # Refusing the pack by name is the only way that stays visible.
+            named: list[str] = []
+            if "kind" in select:
+                named.append(select["kind"])
+            for key in ("kind_in", "kind_not_in"):
+                named += list(select.get(key) or [])
+            unknown = [kind for kind in named if kind not in CHANGE_KINDS]
+            _require(not unknown,
+                     f"{where}: `select` names change kind {unknown}, which the reader "
+                     f"never produces; known kinds: {', '.join(CHANGE_KINDS)}")
 
         has_assert, forbids = "assert" in rule, bool(rule.get("forbid"))
         _require(has_assert != forbids,
@@ -566,6 +579,22 @@ class RuleReport:
     indexes: int = 0
     origin: str = "ddl"
     unread: list[tuple[int, str, str]] = field(default_factory=list)
+
+    @property
+    def asserted(self) -> int:
+        """Rules that found at least one row to judge.
+
+        A rule that matched no row asserted nothing about the script, and an
+        empty set is not a pass.  The count is here rather than in the printer
+        because the verdict and the exit code both depend on it, and they must
+        agree with each other.
+        """
+        return sum(1 for row in self.applied if row["matched"])
+
+    @property
+    def idle(self) -> int:
+        """Rules that named an empty set of rows, so nothing was checked."""
+        return len(self.applied) - self.asserted
 
 
 # What to do when a pack asks for facts this run did not read.  A refusal that
