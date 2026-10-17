@@ -287,6 +287,38 @@ what each rule looked at
   a person reads this and decides. This layer reviews; it never executes.
 ```
 
+### Reviewing a query before it runs
+
+A statement a model wrote is valid SQL, so the database will answer it. The two questions that
+matter are whether it will run at all, and whether the number can be wrong while nothing raises
+an error. `query` asks them in that order, against a schema you name:
+
+```bash
+python -m schemafence.query --sql query.sql --schema examples/sample_schema.sql
+python -m schemafence.query --sql - --db "$PG_DSN" < query.sql
+```
+
+```
+schema : sample_schema.sql (7 table(s), 33 column(s))
+guard  : ALLOWED (rewritten) — it was going to take more rows than 100, so a LIMIT was set
+         run this, not the statement as it was written:
+           ...
+           LIMIT 100
+[findings] 1
+  HIGH   shop.refunds.refund_amount  tested in WHERE
+         check : S3
+         what  : A LEFT JOIN cancelled by the WHERE clause
+```
+
+Exit codes: **0** it will run and nothing fired, **1** it will not run or a check fired,
+**2** it could not be reviewed — no schema was given, or the statement names a table this run
+never read. That last one is the case worth keeping: a statement pointing at a table nobody
+loaded is not clean, it is unchecked. The schema is never defaulted, for exactly that reason.
+
+Two checks read statements today: a measure summed after a one-to-many join (S1), and a LEFT
+JOIN that the WHERE clause turns back into an inner join (S3). The other four described in
+`checks_sql.py` are in [`docs/roadmap.md`](docs/roadmap.md).
+
 ### From your examples to a rule
 
 The vocabulary is what you hand a model, but a rule usually starts as a sentence and a few

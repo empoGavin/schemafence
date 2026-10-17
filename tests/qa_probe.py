@@ -125,6 +125,24 @@ def review_cli(args, env=None, timeout=None):
         TIMINGS.append(("review " + label, time.perf_counter() - started))
 
 
+def query_cli(args, env=None, timeout=None, stdin=None):
+    """The statement review, run the way a pipeline would run it.
+
+    ``stdin`` is passed through when a case feeds the statement that way,
+    because the point of Q10 is that both input shapes give one answer.
+    """
+    if timeout is None:
+        timeout = TIMEOUT
+    started = time.perf_counter()
+    try:
+        return subprocess.run([PY, "-m", "schemafence.query", *args],
+                              capture_output=True, text=True, env=child_env(env),
+                              cwd=str(ROOT), timeout=timeout, input=stdin)
+    finally:
+        label = args[0] if args else "(no args)"
+        TIMINGS.append(("query " + label, time.perf_counter() - started))
+
+
 # --------------------------------------------------------------------------- #
 # A. guard gates
 # --------------------------------------------------------------------------- #
@@ -1514,6 +1532,103 @@ def _diagram_faults(text: str) -> list:
     return faults
 
 
+# --------------------------------------------------------------------------- #
+# Q. one statement, the way a pipeline would review it before running it
+# --------------------------------------------------------------------------- #
+def query_cases() -> None:
+    """A statement a model wrote, judged before anybody runs it.
+
+    ``check_sql`` could already answer "will this number be wrong", and
+    ``guard`` could already answer "will this run", and neither had a way in
+    from a shell.  Q1 to Q5 are the two answers on the same input.  Q6 to Q9
+    are the four ways a review can be asked for and have nothing to say; every
+    one of them must exit 2 rather than print a clean bill.  Q7 and Q11 are the
+    pair that matters: one names a table this run did not read, the other names
+    no table at all, and a tool that reports both as "clean" is lying about
+    the first.
+    """
+    print("\n[Q] query — one statement, a schema, and two answers")
+
+    home = TMP / "query"
+    home.mkdir(parents=True, exist_ok=True)
+    schema = home / "schema.sql"
+    schema.write_text(SQL_SAMPLE_DDL, encoding="utf-8")
+
+    def wrote(name: str, body: str) -> str:
+        path = home / name
+        path.write_text(body, encoding="utf-8")
+        return str(path)
+
+    base = ["--schema", str(schema)]
+
+    clean = wrote("clean.sql",
+                  "SELECT o.status, SUM(o.paid_amount) FROM shop.orders o "
+                  "WHERE o.paid_at >= now() - interval '7 days' "
+                  "GROUP BY o.status LIMIT 50;")
+    run = query_cli(["--sql", clean, *base])
+    check("Q1", "a clean statement is allowed and nothing fires",
+          run.returncode == 0 and "ALLOWED" in run.stdout and "no check fired" in run.stdout,
+          f"rc={run.returncode}")
+
+    fanout = wrote("fanout.sql",
+                   "SELECT SUM(o.paid_amount) FROM shop.orders o "
+                   "JOIN shop.order_items i ON i.order_id = o.id;")
+    run = query_cli(["--sql", fanout, *base])
+    check("Q2", "a measure summed across a one-to-many join is reported as S1",
+          run.returncode == 1 and "S1" in run.stdout, f"rc={run.returncode}")
+
+    cancelled = wrote("cancelled.sql",
+                      "SELECT o.id FROM shop.orders o LEFT JOIN shop.order_audit a "
+                      "ON a.order_id = o.id WHERE a.note = 'x';")
+    run = query_cli(["--sql", cancelled, *base])
+    check("Q3", "a LEFT JOIN cancelled by a WHERE condition is reported as S3",
+          run.returncode == 1 and "S3" in run.stdout, f"rc={run.returncode}")
+
+    write = wrote("write.sql", "DELETE FROM shop.orders;")
+    run = query_cli(["--sql", write, *base])
+    check("Q4", "a statement the guard blocks is reported with its layer, and exits 1",
+          run.returncode == 1 and "BLOCKED at L2" in run.stdout, f"rc={run.returncode}")
+
+    capped = wrote("capped.sql", "SELECT * FROM shop.orders LIMIT 100000;")
+    run = query_cli(["--sql", capped, *base])
+    check("Q5", "a LIMIT over the cap is shown as rewritten, and the rewrite exits 0",
+          run.returncode == 0 and "ALLOWED (rewritten)" in run.stdout
+          and "LIMIT 100" in run.stdout, f"rc={run.returncode}")
+
+    empty = wrote("empty.sql", "\n-- nothing but a comment\n")
+    run = query_cli(["--sql", empty, *base])
+    check("Q6", "an empty statement is not reviewable, and exits 2",
+          run.returncode == 2, f"rc={run.returncode}")
+
+    absent = wrote("absent.sql", "SELECT * FROM shop.users;")
+    run = query_cli(["--sql", absent, *base])
+    check("Q7", "a table this run did not read is named, and exits 2",
+          run.returncode == 2 and "shop.users" in run.stdout, f"rc={run.returncode}")
+
+    run = query_cli(["--sql", clean])
+    check("Q8", "with no schema it refuses, and names both ways to supply one",
+          run.returncode == 2 and "--schema" in run.stdout and "--db" in run.stdout,
+          f"rc={run.returncode}")
+
+    run = query_cli(["--sql", str(home / "there-is-no-such.sql"), *base])
+    check("Q9", "a path that is not there exits 2 rather than raising",
+          run.returncode == 2 and "no such file" in run.stdout, f"rc={run.returncode}")
+
+    run = query_cli(["--sql", "-", *base], stdin=open(fanout, encoding="utf-8").read())
+    check("Q10", "the same statement from standard input gives the same answer",
+          run.returncode == 1 and "S1" in run.stdout, f"rc={run.returncode}")
+
+    trivial = wrote("trivial.sql", "SELECT 1;")
+    run = query_cli(["--sql", trivial, *base])
+    check("Q11", "a statement that names no table is clean, and says why that is enough",
+          run.returncode == 0 and "names no table" in run.stdout, f"rc={run.returncode}")
+
+    two = wrote("two.sql", "SELECT 1; SELECT 2;")
+    run = query_cli(["--sql", two, *base])
+    check("Q12", "two statements in one call are blocked at L1, not split and run",
+          run.returncode == 1 and "BLOCKED at L1" in run.stdout, f"rc={run.returncode}")
+
+
 def doc_cases() -> None:
     """The outward-facing docs quote numbers and point at files; both go stale in silence.
 
@@ -1715,6 +1830,7 @@ def main() -> int:
     inference_cases()
     catalogue_cases()
     script_review_cases()
+    query_cases()
     doc_cases()
 
     passed = sum(1 for _cid, _d, ok, _x in RESULTS if ok)

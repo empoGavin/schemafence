@@ -26,7 +26,8 @@
 | M. 活库事实与索引归一 | 10 | 1（M1 首跑断言写错） | 10 PASS |
 | N. 文档（链接、数字、措辞、版本、语言、横幅） | 10 | 0 | 10 PASS |
 | P. 批量审核与 DML 动作 | 14 | 1（P7 首跑断言写错） | 14 PASS |
-| **合计** | **163** | **13** | **163 PASS** |
+| Q. 查询审核入口 | 12 | 12（入口当时不存在） | 12 PASS |
+| **合计** | **175** | **25** | **175 PASS** |
 
 「首跑失败」一列记的是最初那一轮的结果。A25–A33、J11、N5–N10 是之后几轮补的，
 各自也都先红后绿（闸门缺陷、文档语言统一、小洞清理三批），细节见各节。
@@ -36,6 +37,8 @@ I1、I2 随「harness 不该继承操作者 key 文件」的修复一起进来�
 J0–J10 随 `checks_sql.py` 一起进来（见 §J）。
 P1–P14 随「批量审核与 DML 动作」一起进来：`--script` 收文件/目录、退出码聚合、
 DML 拆成四种动作并带 `has_where`，以及「一条规则都没断言到任何行 → 退出码 2」（见 §P）。
+Q1–Q12 随 `schemafence/query.py` 一起进来：把 `guard()` 与 `check_sql()` 的两问
+接到同一条命令上，并且让「点了没读过的表」退出 2 而不是报干净（见 §Q）。
 K0–K9 随规则包（`schemafence/rulepack.py`、`rules/*.json`、`python -m schemafence.review`）
 一起进来（见 §K）。
 L0–L11 随事实注册表（`schemafence/facts.py`）与 `--infer` 一起进来（见 §L）。L0 首跑是
@@ -450,6 +453,34 @@ N2 与 N4 都是这一节的牙齿，N3 也有齿，都是先看见真事故（�
 P7 首跑失败是**用例自己写错**：除了「0 条 finding」，还多断言了 `asserted >= 1`，
 而这三条语句本来就没有任何规则可断言（带 WHERE 的 UPDATE/DELETE 不落在选择集里）。
 沉默就是沉默，不能顺手要求它同时「断言过什么」。
+
+## Q. 查询审核入口（一条语句，两问）
+
+前置：`python -m schemafence.query`（`tests/qa_probe.py` 的 `query_cases()`）。
+判据 schema 由 `SQL_SAMPLE_DDL` 写到 `tests/tmp/query/schema.sql`，与脚本审核用的
+`examples/sample_schema.sql` 不是同一套 —— 前者带 `order_items` / `order_audit`，
+专为造出一对多与 LEFT JOIN 这两个形态。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| Q1 | 干净 | 带 `--schema` | 一条带 WHERE、GROUP BY、LIMIT 50 的汇总 | rc=0，打印 `ALLOWED` 与 `no check fired` | `rc=0` | PASS |
+| Q2 | S1 命中 | 同上 | `SUM(o.paid_amount)` 跨 `order_items` 一对多 JOIN | rc=1，输出含 `S1` | `rc=1` | PASS |
+| Q3 | S3 命中 | 同上 | `LEFT JOIN order_audit` 后把右表列写进 `WHERE` | rc=1，输出含 `S3` | `rc=1` | PASS |
+| Q4 | 闸门拦下 | 同上 | `DELETE FROM shop.orders;` | rc=1，输出含 `BLOCKED at L2` | `rc=1` | PASS |
+| Q5 | 改写 | 同上 | `SELECT * FROM shop.orders LIMIT 100000;` | rc=0，打印 `ALLOWED (rewritten)` 与 `LIMIT 100` | `rc=0` | PASS |
+| Q6 | 空语句 | 同上 | 只有注释的文件 | rc=2 | `rc=2` | PASS |
+| Q7 | 未读过的表 | 同上 | `SELECT * FROM shop.users;`（schema 里没有） | rc=2，且点名 `shop.users` | `rc=2` | PASS |
+| Q8 | 缺判据 | 不给 `--schema` / `--db` | 干净语句 | rc=2，同时列出 `--schema` 与 `--db` | `rc=2` | PASS |
+| Q9 | 路径不存在 | 同上 | 一个不存在的 `--sql` 路径 | rc=2，打印 `no such file`，不抛栈 | `rc=2` | PASS |
+| Q10 | 标准输入 | 同上 | `--sql -`，把 Q2 的语句管道进来 | rc=1，输出含 `S1`，与给文件时同解 | `rc=1` | PASS |
+| Q11 | 无表语句 | 同上 | `SELECT 1;` | rc=0，并说明「没点任何表，所以没什么可错」 | `rc=0` | PASS |
+| Q12 | 多语句 | 同上 | `SELECT 1; SELECT 2;` | rc=1，`BLOCKED at L1`，不拆分也不执行 | `rc=1` | PASS |
+
+Q7 与 Q11 是一对：一个点了没读过的表，一个什么都没点。把两者都报成「干净」，
+就是对一个没被检查过的语句说谎 —— 所以前者 2、后者 0。
+
+「先红」怎么验的：这 12 条在入口存在之前全红（`schemafence.query` 不存在，
+子进程直接返回非零），不需要额外造红灯。
 
 ## 已知约定核对
 

@@ -66,6 +66,14 @@ _PLAIN = re.compile(r"^[A-Za-z_]\w*$")
 class SqlReview:
     findings: list[Finding] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # What the statement pointed at, and what of that this run could not
+    # resolve.  A caller outside this module needs both: "the table is not in
+    # the schema" and "there is no table" produce the same empty finding list
+    # and are not the same answer.  `references` empty means the statement
+    # never involves the schema at all; `unresolved` non-empty means it does,
+    # and this run read nothing about it.
+    references: list[str] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +153,10 @@ def _read_chain(schema: Schema, clean: str, depth: list[int],
             kind="FROM" if kind == "FROM" else "JOIN",
             start=m.start(),
         ))
+    for entry in entries:
+        key = entry.name.lower()
+        if key not in review.references:
+            review.references.append(key)
     if not entries:
         return entries
 
@@ -173,6 +185,8 @@ def _read_chain(schema: Schema, clean: str, depth: list[int],
         entry.key_columns = sorted(set(keys))
 
         if entry.table is None:
+            if entry.name.lower() not in review.unresolved:
+                review.unresolved.append(entry.name.lower())
             review.notes.append(
                 f"{entry.name} is not in the schema this run read — its join keys "
                 f"cannot be checked")

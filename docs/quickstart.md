@@ -289,7 +289,71 @@ python -m schemafence.review --rules rules/table-hygiene.json \
 python -m schemafence.review --script sql/2026-10/
 ```
 
-### 2.5 故意让护栏拦一次
+### 2.5 审一条 AI 生成的查询
+
+上一节审的是变更脚本（要建什么）。这一节审的是查询：模型给的那条 SQL 跑起来不报错，
+但数可能是错的。这类错误只有把语句和 schema 放在一起读才看得见。
+
+```bash
+cat > /tmp/query.sql <<'SQL'
+SELECT o.id, o.amount
+FROM shop.orders o
+LEFT JOIN shop.refunds r ON r.order_id = o.id
+WHERE r.refund_amount > 100;
+SQL
+
+python3 -m schemafence.query --sql /tmp/query.sql --schema examples/sample_schema.sql
+```
+
+`--sql -` 从标准输入读，方便接在管道后面：
+
+```bash
+cat /tmp/query.sql | python3 -m schemafence.query --sql - --schema examples/sample_schema.sql
+```
+
+预期（节选）：
+
+```
+schema : sample_schema.sql (7 table(s), 33 column(s))
+guard  : ALLOWED (rewritten) — it was going to take more rows than 100, so a LIMIT was set
+         run this, not the statement as it was written:
+           SELECT o.id, o.amount
+           ...
+           LIMIT 100
+         session, before it:
+           SET default_transaction_read_only = on
+           SET statement_timeout = '10000ms'
+
+[findings] 1
+  HIGH   shop.refunds.refund_amount  tested in WHERE
+         check : S3
+         what  : A LEFT JOIN cancelled by the WHERE clause
+         why   : `shop.refunds` is joined with LEFT JOIN, then ... the row is dropped
+         fix   : Move the condition into the JOIN's ON clause. ...
+```
+
+它按两问的顺序答，第二问只在乎第一问过了没有：
+
+1. **能不能跑** —— 七层闸门判允许 / 改写 / 拦下，它交回的那条语句才是该执行的。
+   改写会打印出来，不静默替换。
+2. **数会不会错** —— 语句和 schema 对着读。这是数据库自己答不出来的部分：
+   两半各自都合法，合起来是错的。
+
+退出码 **0** 能跑且没命中、**1** 跑不了或至少命中一条、**2** 没审完 ——
+语句点了这张 schema 里没有的表，就是 2。那半截没被读过，不算通过。
+所以 `--schema` 与 `--db` 必须给一个，不给就是 2：
+
+```bash
+# 拿活库的目录当判据（只读，和 review 共用同一个读接口）
+python3 -m schemafence.query --sql query.sql --db "$PG_DSN"
+```
+
+现在能读出来的是两项：一对多 JOIN 之后还被求和的度量（S1）、被 WHERE 抵消的
+LEFT JOIN（S3）。`checks_sql.py` 里另外四种（DISTINCT 吞掉重复的度量、时间边界、
+混用时间列、混层聚合）只有描述，见 `docs/roadmap.md`。**这个入口不拦执行** ——
+它出声，拦不拦由闸门和读报告的人决定。
+
+### 2.6 故意让护栏拦一次
 
 ```bash
 python3 -c "
