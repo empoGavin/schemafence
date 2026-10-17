@@ -1191,6 +1191,167 @@ def catalogue_cases() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# V. the catalog reads go through the one gate, and a full read is a refusal
+# --------------------------------------------------------------------------- #
+class _FakeCursor:
+    """The two methods ``_rows`` uses, and a record of what it was asked to run."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql):
+        self._conn.statements.append(sql)
+
+    def fetchall(self):
+        return list(self._conn.rows)
+
+
+class _FakeConn:
+    """A connection that answers with rows it was handed, and keeps the SQL."""
+
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.statements: list[str] = []
+
+    def cursor(self):
+        return _FakeCursor(self)
+
+    def close(self):
+        pass
+
+
+def catalog_read_cases() -> None:
+    """Every read this project makes of a live catalog passes the same gate.
+
+    A read that bypassed ``guard()`` would be a second door, and the one thing
+    the gate exists to prevent is a second door.  Two claims follow, and the
+    second is the one that needs a test: the statement that reaches the server
+    is the one the gate handed back, and a read that fills its cap is refused
+    rather than returned half done.  Half a catalog reviews clean for every
+    table in the half that was never read.
+    """
+    print("\n[V] the catalog reads — one gate, and a full read is a refusal")
+    from schemafence import review as review_mod
+    from schemafence import snapshot
+
+    caps = getattr(snapshot, "CATALOG_CAPS", None)
+    if caps is None:
+        # Red the honest way: every case in this section fails, and the rest
+        # of the harness keeps running, instead of the section raising.
+        check("V1", "all five catalog reads pass the gate and come back with a cap",
+              False, "snapshot has no CATALOG_CAPS")
+        check("V2", "each read carries the cap its shape needs", False,
+              "snapshot has no CATALOG_CAPS")
+        check("V3", "a read that stays under its cap returns every row", False,
+              "snapshot has no _rows")
+        check("V4", "a read that fills its cap is refused", False,
+              "snapshot has no CatalogTooLarge")
+        check("V5", "a read the gate blocks is refused with its layer", False,
+              "snapshot has no CatalogRefused")
+        check("V6", "the statement that reaches the server is the gate's", False,
+              "snapshot has no _rows")
+        check("V7", "review.read_catalog reports a refusal as a reason", False,
+              "snapshot has no caps to fill")
+        check("V8", "the cap table is the closed set of reads", False,
+              "snapshot has no CATALOG_CAPS")
+        return
+    reads = [("tables", snapshot.TABLES_SQL),
+             ("columns", snapshot.COLUMNS_SQL),
+             ("indexes", snapshot.INDEXES_SQL),
+             ("statistics", snapshot.NULL_FRACTION_SQL),
+             ("row_estimates", snapshot.ROW_ESTIMATE_SQL)]
+
+    # V1  every one of the five is allowed, and every one comes back rewritten
+    verdicts = [(what, guard(sql, max_rows=caps[what])) for what, sql in reads]
+    check("V1", "all five catalog reads pass the gate and come back with a cap",
+          all(v.ok and v.rewritten and f"LIMIT {caps[what]}" in v.sql
+              for what, v in verdicts),
+          ", ".join(f"{w}:{'ok' if v.ok else 'BLOCKED'}"
+                    f"{'/capped' if v.rewritten else ''}" for w, v in verdicts))
+
+    # V2  the caps are shaped by the read, and none of them is the default 100
+    check("V2", "each read carries the cap its shape needs: columns at least ten "
+                "times the tables, indexes larger than the tables, none at 100",
+          caps["columns"] >= caps["tables"] * 10
+          and caps["indexes"] > caps["tables"]
+          and 100 not in caps.values(),
+          f"tables={caps['tables']} columns={caps['columns']} "
+          f"indexes={caps['indexes']}")
+
+    # V3  a read that stays under its cap comes back whole
+    conn = _FakeConn([("shop", "orders", None)] * 3)
+    rows = snapshot._rows(conn, snapshot.TABLES_SQL, "tables")
+    check("V3", "a read that stays under its cap returns every row",
+          rows == [("shop", "orders", None)] * 3, f"{len(rows)} row(s)")
+
+    # V4  a read that fills its cap is a refusal, not a short answer
+    full = _FakeConn([("shop", "t", None)] * caps["tables"])
+    refused = None
+    try:
+        snapshot._rows(full, snapshot.TABLES_SQL, "tables")
+    except snapshot.CatalogTooLarge as exc:
+        refused = exc
+    check("V4", "a read that fills its cap is refused, and says which read and "
+                "how many",
+          isinstance(refused, snapshot.CatalogTooLarge)
+          and "tables" in str(refused) and str(caps["tables"]) in str(refused),
+          f"{type(refused).__name__}: {refused}" if refused else "returned anyway")
+
+    # V5  a statement the gate refuses never reaches the connection
+    unsafe = _FakeConn()
+    blocked = None
+    try:
+        snapshot._rows(unsafe, "DELETE FROM shop.orders", "tables")
+    except snapshot.CatalogRefused as exc:
+        blocked = exc
+    check("V5", "a read the gate blocks is refused with its layer, and the "
+                "connection is never touched",
+          isinstance(blocked, snapshot.CatalogRefused) and "L2" in str(blocked)
+          and unsafe.statements == [],
+          f"{type(blocked).__name__}: {blocked} stdin={unsafe.statements}")
+
+    # V6  what the server is asked to run is the gate's statement, not the constant
+    seen = _FakeConn()
+    snapshot._rows(seen, snapshot.COLUMNS_SQL, "columns")
+    handed = guard(snapshot.COLUMNS_SQL, max_rows=caps["columns"]).sql
+    check("V6", "the statement that reaches the server is the one the gate "
+                "handed back, not the constant",
+          seen.statements == [handed]
+          and seen.statements != [snapshot.COLUMNS_SQL],
+          f"{len(seen.statements)} statement(s), capped="
+          f"{bool(seen.statements and 'LIMIT' in seen.statements[0])}")
+
+    # V7  read_catalog turns a refusal into a reason, and does not raise
+    original = snapshot.connect
+    snapshot.connect = lambda dsn: _FakeConn([("shop", "t", None)] * caps["tables"])
+    try:
+        schema, why = review_mod.read_catalog("postgresql://unused")
+    finally:
+        snapshot.connect = original
+    check("V7", "review.read_catalog reports a refusal as a reason and a "
+                "missing schema, rather than raising",
+          schema is None and "catalog" in why.lower(),
+          f"{schema=} why={why[:60] if why else why}")
+
+    # V8  the cap table is the closed set of reads, so a typo cannot read uncaught
+    unknown = None
+    try:
+        snapshot._rows(_FakeConn(), snapshot.TABLES_SQL, "tabeles")
+    except ValueError as exc:
+        unknown = exc
+    check("V8", "the cap table is the closed set of reads: an unknown name is "
+                "rejected instead of defaulting",
+          set(caps) == {what for what, _ in reads} and unknown is not None,
+          f"keys={sorted(caps)} unknown={type(unknown).__name__}")
+
+
+# --------------------------------------------------------------------------- #
 # P. a script that is not only DDL, and a folder of them
 # --------------------------------------------------------------------------- #
 def script_review_cases() -> None:
@@ -1829,6 +1990,7 @@ def main() -> int:
     rulepack_cases()
     inference_cases()
     catalogue_cases()
+    catalog_read_cases()
     script_review_cases()
     query_cases()
     doc_cases()

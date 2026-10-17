@@ -16,17 +16,16 @@
 | 问一个运维手册里写着答案的问题 | `python agent_cli.py --ask "…"` | `planner.py` → `knowledge.py` → `tools.py` → `guard.py` |
 | 诊断一套活库 | `python demo.py --db "$PG_DSN"` | `snapshot.py` → `checks.py` |
 | 全离线跑一遍：不要库，也不要 key | `python demo.py` | 除了活库那几处读，上面全都有 |
-| 跑回归门禁 | `python tests/qa_probe.py` | 163 例 |
-| 查一条被人说「数字不对」的查询 | **还没有命令** | 将来是 `checks_sql.py` |
-| 把一条你自己写的语句交给闸门 | **还没有命令** | 将来是 `guard.py` |
+| 跑回归门禁 | `python tests/qa_probe.py` | 183 例 |
+| 查一条被人说「数字不对」的查询 | `python -m schemafence.query --sql q.sql --schema schema.sql` | `guard.py` → `checks_sql.py` |
+| 把一条你自己写的语句交给闸门 | 同上一条 —— `query` 先过闸门、再对 schema 检查；要的是裸闸门判决时，`guard()` 仍是库函数 | `guard.py` |
 | 跑一次诊断，并把这次的结果留下 | **还没有命令** | 将来是 `snapshot.py` → `checks.py` → 一个存放历次运行的存储 |
 
-**三个还没有入口的地方。** 语句检查（S1 和 S3：「一对多 JOIN 之后再求和」、「`LEFT JOIN` 被 `WHERE`
-里的条件取消掉」）**没有命令行入口** —— 没有 `--sql`。`demo.py` 拿它做自检，库接口里有 `check_sql`，
-但没办法把自己写的语句递进去换回一份报告。闸门也没有前门：它是个库函数，所以**你**写的语句只能从
-Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、把结果加总成一句话、把这次运行留下 —— 一行代码
-都还没有；它要跑的两样东西都已经在了：`snapshot.py` 里的活库读，和 `checks.py` 里的 schema 检查。
-这三处记在 [roadmap.md](roadmap.md) 里。
+**一个还没有入口的地方。** 诊断那一半 —— 一趟跑完一组检查、把结果加总成一句话、把这次运行
+留下 —— 一行代码都还没有；它要跑的两样东西都已经在了：`snapshot.py` 里的活库读，和
+`checks.py` 里的 schema 检查。语句检查（S1 和 S3）现在有 `python -m schemafence.query`
+这个入口，闸门的判决和「数会不会错」是同一条命令里的两问。这一处记在
+[roadmap.md](roadmap.md) 里。
 
 ## 模块
 
@@ -35,7 +34,7 @@ Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、�
 | 文件 | 它做什么 |
 | --- | --- |
 | `ddl.py` | 读一份变更脚本：最后留下哪些表和列、建了哪些索引和键、为此做了哪些动作。同一个东西的各种写法（列上的 `PRIMARY KEY`、写在表体里、写成具名约束、事后 `ALTER TABLE` 加、`CREATE UNIQUE INDEX`）都塌成**一条**记录下来的事实。改数据的语句同样按动作读，分成 `insert`、`update`、`delete`、`truncate` 四种，每条带一个 `has_where` —— 只看顶层，子查询里的 `WHERE` 过滤的是那个子查询。 |
-| `snapshot.py` | 从跑着的 PostgreSQL 里读同一批事实：表和列、索引来自 `pg_catalog`，行数估计来自 `pg_class.reltuples`，NULL 比例来自 `pg_stats`。`build_schema()` 是纯函数，所以解析可以离线测；`apply_script()` 把待审脚本建的索引并到库里已有的事实上。 |
+| `snapshot.py` | 从跑着的 PostgreSQL 里读同一批事实：表和列、索引来自 `pg_catalog`，行数估计来自 `pg_class.reltuples`，NULL 比例来自 `pg_stats`。五条读全部走 `guard()`，每条读有自己的上限；读满上限就是**拒读**而不是给半个 schema —— 半个 schema 判出来的「干净」是假通过。`build_schema()` 是纯函数，所以解析可以离线测；`apply_script()` 把待审脚本建的索引并到库里已有的事实上。 |
 | `facts.py` | 事实注册表：每个事实模型（`ddl`、`schema`、`catalog`）上规则可以选哪些字段，以及产出这些行的 provider。`--vocabulary` 和 `--facts` 都由它生成，所以对着规则写出来的词表不会和跑它的求值器走散。 |
 | `rulepack.py` | 一条审核规则是一个**文件**：对事实的一次选择、一条断言，和证明它的例子。加载时先拿它自己的例子验一遍，不对就拒收。`review_ddl()` 和 `review_schema()`（两条审核路径共用的那一半）以及 `--infer` 都在这里。 |
 | `checks.py` | schema 检查：命名撞车、连接键、类型与精度、NULL 语义、卫生。只读一份 schema。 |
@@ -103,8 +102,8 @@ Python 里够到它。还有诊断那一半 —— 一趟跑完一组检查、�
 | 加一个 schema 检查 | `checks.py`，外加 `tests/qa_probe.py` 里的用例。 |
 | 加一个语句检查 | `checks_sql.py`。它只报告，所以不属于 `guard.py`。 |
 | 改「一条语句能不能跑」 | `guard.py`。这是规则包唯一碰不到的东西。 |
-| 让活库上的每一处读都过闸门 | `snapshot.py` 的五条 catalog 读，加上 `guard.py` 里让其中两条根本过不去、另外三条被悄悄截到 100 行的两个缺陷。 |
-| 让一个人把语句交给闸门 | 给 `guard.py` 加一个前门。决定本身不动；前门只是包在它外面的一层。 |
+| 让活库上的每一处读都过闸门 | 已经是这样了：`snapshot.py` 的五条 catalog 读走同一个 `_rows()`，执行的是 `guard()` 交回的语句，每条读有自己的上限，读满即拒读。 |
+| 让一个人把语句交给闸门 | `python -m schemafence.query` 就是这么一个门：先过闸门、再对 schema 检查，退出码 0 / 1 / 2。要不要再有一个只出闸门判决、不带 schema 检查的裸前门，记在 [roadmap.md](roadmap.md) 的「给闸门一扇前门」一条。 |
 | 加一个对**结果**而不是对语句的检查 | 在 `checks_sql.py` 旁边新开一个模块。它读一份结果和用来判它的预期，只报告、从不下判断 —— 这一层其他部分守的就是这条。离线那半不需要数据库；活库那半走闸门。 |
 | 加一趟诊断，或者加一份历次运行的记忆 | 新开一个模块。它通过 `snapshot.py` 读、复用 `checks.py`，结论按历次运行存起来。 |
 | 改答案质量 | 语料、切片、`--k`，或者相关度地板 —— 不是代码路径。 |

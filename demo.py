@@ -158,21 +158,38 @@ def show_live(dsn: str, schema) -> None:
         return
 
     with conn:
-        live = snapshot.read_schema(conn)
+        try:
+            live = snapshot.read_schema(conn)
+        except snapshot.CatalogRefused as exc:
+            print(f"  the catalogue read was refused: {exc}")
+            return
+        except snapshot.CatalogTooLarge as exc:
+            print(f"  the catalogue read was stopped: {exc}")
+            print("  raise the cap in schemafence/snapshot.py CATALOG_CAPS, or read "
+                  "fewer schemas, and run this again.")
+            return
         print(f"  tables read from the catalogue : {len(live.tables)}")
         print(f"  columns                        : {live.column_count}")
         print(f"  indexes                        : "
               f"{sum(len(t.indexes) for t in live.tables)} "
               f"(read from pg_index, for rules that need them)")
 
-        estimates = snapshot.row_estimates(conn)
+        try:
+            estimates = snapshot.row_estimates(conn)
+        except snapshot.CatalogTooLarge as exc:
+            print(f"  {exc}")
+            return
         print()
         print("  row estimates (from pg_class.reltuples, no COUNT(*))")
         for (ns, name), rows in sorted(estimates.items()):
             if name in {t.name for t in live.tables}:
                 print(f"    {ns}.{name:<24} ~{rows}")
 
-        fractions = snapshot.null_fractions(conn)
+        try:
+            fractions = snapshot.null_fractions(conn)
+        except snapshot.CatalogTooLarge as exc:
+            print(f"  {exc}")
+            return
         if not fractions:
             print()
             print("  no column statistics yet — run ANALYZE on the demo schema")

@@ -27,7 +27,8 @@
 | N. 文档（链接、数字、措辞、版本、语言、横幅） | 10 | 0 | 10 PASS |
 | P. 批量审核与 DML 动作 | 14 | 1（P7 首跑断言写错） | 14 PASS |
 | Q. 查询审核入口 | 12 | 12（入口当时不存在） | 12 PASS |
-| **合计** | **175** | **25** | **175 PASS** |
+| V. 目录读接入闸门 | 8 | 8（接线当时不存在） | 8 PASS |
+| **合计** | **183** | **33** | **183 PASS** |
 
 「首跑失败」一列记的是最初那一轮的结果。A25–A33、J11、N5–N10 是之后几轮补的，
 各自也都先红后绿（闸门缺陷、文档语言统一、小洞清理三批），细节见各节。
@@ -39,6 +40,8 @@ P1–P14 随「批量审核与 DML 动作」一起进来：`--script` 收文件/
 DML 拆成四种动作并带 `has_where`，以及「一条规则都没断言到任何行 → 退出码 2」（见 §P）。
 Q1–Q12 随 `schemafence/query.py` 一起进来：把 `guard()` 与 `check_sql()` 的两问
 接到同一条命令上，并且让「点了没读过的表」退出 2 而不是报干净（见 §Q）。
+V1–V8 随「目录读接入闸门」（R13）一起进来：五条 catalog 读走同一个 `_rows()`，
+执行的是 `guard()` 交回的语句，读满上限即拒读（见 §V）。
 K0–K9 随规则包（`schemafence/rulepack.py`、`rules/*.json`、`python -m schemafence.review`）
 一起进来（见 §K）。
 L0–L11 随事实注册表（`schemafence/facts.py`）与 `--infer` 一起进来（见 §L）。L0 首跑是
@@ -481,6 +484,30 @@ Q7 与 Q11 是一对：一个点了没读过的表，一个什么都没点。把
 
 「先红」怎么验的：这 12 条在入口存在之前全红（`schemafence.query` 不存在，
 子进程直接返回非零），不需要额外造红灯。
+
+## V. 目录读接入闸门（五条 catalog 读，和「读满即拒」）
+
+前置：`schemafence/snapshot.py` 的 `_rows()` / `CATALOG_CAPS` / `CatalogRefused` /
+`CatalogTooLarge`（`tests/qa_probe.py` 的 `catalog_read_cases()`）。假连接只实现
+`cursor()` / `execute()` / `fetchall()`，并记下收到的每一条 SQL —— 判据是
+「服务器看到的那条语句」和「收到几条」，不需要真库。
+
+| 编号 | 维度 | 前置条件 | 步骤（命令 / 输入） | 预期结果 | 实际结果 | 结果 |
+|---|---|---|---|---|---|---|
+| V1 | 全过闸门 | 五条常量 | 逐条 `guard(sql, max_rows=caps[what])` | 全部允许，且改写后的语句带各自的 `LIMIT` | 五条全 `ok/capped` | PASS |
+| V2 | 上限成形 | `CATALOG_CAPS` | 读五个上限 | 列 ≥ 表 × 10，索引 > 表，没有一条是 100 | `20000 / 500000 / 200000` | PASS |
+| V3 | 正常读 | 3 行的假连接 | `_rows(conn, TABLES_SQL, "tables")` | 原样返回 3 行 | `3 row(s)` | PASS |
+| V4 | 读满即拒 | 恰好 20000 行 | 同上 | 抛 `CatalogTooLarge`，信息含 `tables` 与上限值 | 信息含两者 | PASS |
+| V5 | 拦下即拒 | 一条 `DELETE` | `_rows(conn, "DELETE …", "tables")` | 抛 `CatalogRefused` 带 `L2`，假连接零调用 | `stdin=[]` | PASS |
+| V6 | 执行的是改写 | 空假连接 | 同 V3 后看 `conn.statements` | 等于 `guard()` 交回的语句，不等于常量原文 | `capped=True` | PASS |
+| V7 | 上层接住 | connect 被换成满行假连接 | `review.read_catalog(...)` | `(None, why)`，不抛 | `schema=None` | PASS |
+| V8 | 闭集 | `CATALOG_CAPS` | `_rows(conn, sql, "tabeles")`（拼错） | 抛 `ValueError` 并列出已知读 | `ValueError` | PASS |
+
+V4 与 V3 是一对，V5 与 V1 是一对。上限不是性能参数：读满它意味着这套库大到
+这个工具读不全，拒读比给半个 schema 更接近事实。
+
+「先红」怎么验的：这 8 条在 `_rows()` 存在之前逐条 FAIL（`snapshot` 没有
+`CATALOG_CAPS`，各条以「缺什么」收场），harness 其余部分照常跑完，不是整段崩溃。
 
 ## 已知约定核对
 

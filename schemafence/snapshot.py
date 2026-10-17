@@ -8,7 +8,10 @@ where the facts come from.  Three deliberate choices:
     point of a health check is not to load the instance it is checking;
   * the catalogue is read, never written.  Reading a database to review a
     script is not the write path, and this module holds no statement that
-    changes anything.
+    changes anything.  Every read still goes through ``guard()`` like every
+    other statement this project puts in front of a database — same door,
+    and a cap of its own per read, because a catalog read that fills its
+    cap is a cut and not an answer.
 
 The rows built here are the rows ``ddl.py`` builds, field for field: a rule
 written against a script applies to a catalogue unchanged, and the catalogue
@@ -20,8 +23,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 from .ddl import Column, Index, Schema, Table
+from .guard import guard
 
 SKIP_SCHEMAS = ("pg_catalog", "information_schema", "pg_toast")
+
+# How many rows each catalog read may come back with.  Shaped by the read, not
+# one number: a table is one row per table, a column is one row per column, and
+# a column count runs an order of magnitude past the table count on any real
+# database.  A read that fills its cap has not been read — it has been cut —
+# and half a catalog reviews clean for every table in the half that never came
+# back.  So filling the cap is a refusal, not a short answer.
+CATALOG_CAPS = {
+    "tables": 20_000,        # one row per table; 20k tables is already a fleet
+    "columns": 500_000,      # 25 columns a table at the tables cap
+    "indexes": 200_000,      # 10 indexes a table at the tables cap
+    "statistics": 500_000,   # only columns that carry NULLs, so column-scale
+    "row_estimates": 20_000, # one row per table, same as tables
+}
+
+
+class CatalogRefused(RuntimeError):
+    """The gate blocked a catalog read.  Nothing reached the server."""
+
+
+class CatalogTooLarge(RuntimeError):
+    """A catalog read filled its cap.  What came back is a cut, not a read."""
 
 TABLES_SQL = """
 SELECT n.nspname            AS schema_name,
@@ -165,15 +191,40 @@ def build_schema(table_rows=(), column_rows=(), index_rows=()) -> Schema:
     return schema
 
 
+def _rows(conn, sql: str, what: str) -> list[tuple]:
+    """Run one catalog read the only way a read may run: through the gate.
+
+    ``what`` names the read and picks its cap, so an unknown name cannot slip
+    through on a default.  The statement the server sees is the one ``guard``
+    handed back — with the cap appended, since every constant here asks for the
+    whole table — and a read that comes back full is refused rather than
+    returned half done.
+    """
+    if what not in CATALOG_CAPS:
+        raise ValueError(f"unknown catalog read {what!r}; "
+                         f"known reads are {sorted(CATALOG_CAPS)}")
+    cap = CATALOG_CAPS[what]
+    verdict = guard(sql, max_rows=cap)
+    if not verdict.ok:
+        raise CatalogRefused(
+            f"the {what} read was blocked by the gate at {verdict.layer}: "
+            f"{verdict.reason}")
+    with conn.cursor() as cur:
+        cur.execute(verdict.sql)
+        rows = cur.fetchall()
+    if len(rows) >= cap:
+        raise CatalogTooLarge(
+            f"the {what} read filled its cap of {cap} rows — the catalog is "
+            f"larger than this tool reads whole, so it was refused rather "
+            f"than reviewed half read")
+    return rows
+
+
 def read_schema(conn) -> Schema:
     """Build the same Schema object the DDL reader produces."""
-    with conn.cursor() as cur:
-        cur.execute(TABLES_SQL)
-        tables = cur.fetchall()
-        cur.execute(COLUMNS_SQL)
-        columns = cur.fetchall()
-        cur.execute(INDEXES_SQL)
-        indexes = cur.fetchall()
+    tables = _rows(conn, TABLES_SQL, "tables")
+    columns = _rows(conn, COLUMNS_SQL, "columns")
+    indexes = _rows(conn, INDEXES_SQL, "indexes")
     return build_schema(tables, columns, indexes)
 
 
@@ -217,15 +268,12 @@ def apply_script(schema: Schema, script: Schema) -> Applied:
 
 
 def null_fractions(conn) -> list[tuple]:
-    with conn.cursor() as cur:
-        cur.execute(NULL_FRACTION_SQL)
-        return cur.fetchall()
+    return _rows(conn, NULL_FRACTION_SQL, "statistics")
 
 
 def row_estimates(conn) -> dict[tuple[str, str], int]:
-    with conn.cursor() as cur:
-        cur.execute(ROW_ESTIMATE_SQL)
-        return {(ns, name): rows for ns, name, rows in cur.fetchall()}
+    return {(ns, name): rows
+            for ns, name, rows in _rows(conn, ROW_ESTIMATE_SQL, "row_estimates")}
 
 
 def connect(dsn: str):
