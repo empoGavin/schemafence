@@ -114,11 +114,11 @@ net_sales:
 | **R8** | 规则能对语句生效，不只对 schema 生效 | 一个 SQL 事实模型 | `checks_sql.py` 手里有它要的事实（FROM 链、连接键、唯一性），但没有把它们导成行，所以到今天为止写出来的规则读的都是 DDL。 |
 | **R9** | 一条需要「库里已经有什么」的规则 | 一个 `catalog` 事实模型、`pg_index` | **done** —— `rules/index-hygiene.json` 拒收一份脚本、要求 `--db`；行形状由 `tests/qa_probe.py` M1 与脚本读取器保持一致。这条查询本身需要一个服务器才能跑通。 |
 | **R10** | schema 审计也要在「什么都没读到」时出声，不只审阅器 | `demo.py`、`checks.py` | **done** —— `--source` 给一份没有表定义的脚本时打印 `[nothing to audit]` 并以 2 退出，不再打 `0 finding(s)`；`tests/qa_probe.py` J11 盯着这条。 |
-| **R11** | 能审一条查询，像审一份脚本那样 | `schemafence/review.py` | 没做 —— `checks_sql.py` 没有命令行。`demo.py` 把它的检查当自检跑，库接口也暴露了 `check_sql`，可是桌面上四件活里有一件没有前门：没法把自己写的查询递进去换回一份报告。 |
+| **R11** | 能审一条查询，像审一份脚本那样 | `schemafence/query.py` | **done** —— 落点是一个新模块而不是 `review.py`：`python -m schemafence.query --sql q.sql --schema schema.sql`（或 `--db`、或 `--sql -` 走标准输入）。按两问的顺序答：先过闸门（跑不跑、改写到哪），再对 schema 检查（数会不会错）。退出码 0 / 1 / 2，语句点了这张 schema 里没读到的表就是 2 —— 没读过的不算通过。判据 schema 永不默认（`tests/qa_probe.py` Q1–Q12）。 |
 | **R12** | 跑一趟活库诊断，以及一份历次运行的记忆 | 一个新模块、`snapshot.py`、一个存放历次运行的存储 | 没做 —— 那一趟指的是：把一组检查在一套库上走一遍、打印拿回来的东西、说清这些结果加总成什么；还有那份让 agent 懂**这一套**库、而不是懂「库」这个东西的记忆。它要跑的两样东西都已经在了：活库读和 schema 检查。 |
 | **R13** | 这个项目对活库做的每一处读都过同一道闸门 | `snapshot.py`、`guard.py` | **done** —— `snapshot.py` 的五条 catalog 读走同一个 `_rows()`：执行的是 `guard()` 交回的语句，被拦就拒读（`CatalogRefused`），读满上限也拒读（`CatalogTooLarge`）—— 半个 schema 判出来的「干净」是假通过。每条读有自己的上限（`CATALOG_CAPS`：表 2 万、列 50 万、索引 20 万、统计 50 万、行数估计 2 万，按读的形状给，不在 SQL 里写死）。`review --db` 把拒读变成 rc=2 的原因，`demo.py --db` 打印一行并退出（`tests/qa_probe.py` V1–V8）。 |
 | **R14** | 对不上的结果是 finding | `checks_sql.py` 旁边的一个新模块 | 没做。两层用同一套判据：离线时从 schema 和统计信息预测，挂上 `--db` 时对着真实结果再核一遍。它吸收 R3 —— R3 是同一个问题，只问行数。活库那一半会走闸门。 |
-| **R15** | 给闸门一扇前门，让一个人写的语句能递进去 | `schemafence/guard.py` | 没做：闸门今天是个库函数。`from schemafence import guard` 够得到它，命令行上没有任何东西够得到。前门是 `--sql` 和 `--file`，退出码 0 允许 / 1 拦住 / 2 什么都没认出来，打印判决、作出判决的那一层，以及为了让这个答案成立、调用方必须执行的会话加固语句。只建前门：决定留在一个纯函数里，所以以后在上面套一个 HTTP 或 MCP 的壳，那是包装而不是第二份实现。 |
+| **R15** | 给闸门一扇前门，让一个人写的语句能递进去 | `schemafence/guard.py` | 一半 —— `python -m schemafence.query` 已经是一个前门：`--sql` 收文件或标准输入，打印判决、作出判决的那一层、交回该执行的语句和会话加固语句，退出码 0 允许 / 1 拦住 / 2 没审完；它还多一步对 schema 的检查。**只出闸门判决、不带 schema 检查的裸前门没做** —— 还要不要第二扇门，等定。要建的话决定仍留在纯函数里，前门只是包在它外面的一层。 |
 | **R16** | 一次审一批脚本，给一张汇总和聚合退出码 | `schemafence/review.py` | **done** —— `--script` 可重复、也收目录（递归 `*.sql`、按路径排序；`--ddl` 是旧名，仍然可用）。多份时每份一行，只有带 finding 的才展开详情；退出码聚合：任一判不了 → 2，否则任一命中 → 1，否则 0。同一趟修掉两处输入形态的洞：重复 `--ddl` 只审最后一份、传目录直接抛 `PermissionError`（`tests/qa_probe.py` P9–P12）。 |
 
 R3 守着只读这条规矩。读的是 `pg_class.reltuples` 和 `pg_stats`；活库连接不是写连接，所以 `--db` 这条轴
